@@ -22,7 +22,9 @@ Assume the user may not know a terminal well. Explain each step in one plain sen
 4. **Start**: `npm run dev`. It prints the address to open (default http://localhost:5287, API on 5288). It keeps running; tell the user to keep that terminal open, or start it in the background and give them the printed URL. If the port is taken, ReviewHub is probably already running.
 5. **Check**: `node scripts/rh.mjs info` prints the workspace in use and the reviews in it (`list` for a table of reviews).
 
-Never delete or overwrite anything in the workspace during setup. Removing things is done in the app, which moves them to `<workspace>/trash/`.
+Never delete or overwrite anything in the workspace during setup.
+
+**Hosted version.** If the user works with the hosted ReviewHub (Vercel), reviews live online. To work on one locally (including as an agent reviewer), `node scripts/rh.mjs pull <review>` first and `node scripts/rh.mjs push <review>` when done; never pass `--force` to `pull` without asking, it replaces unpushed local work (a snapshot is kept). Details: `docs/HOSTING.md`. Removing things is done in the app, which moves them to `<workspace>/trash/`.
 
 ---
 
@@ -94,7 +96,10 @@ npm run build    # production build into dist/
 
 **Layout**
 
-- `server/index.js`: API; `server/workspace.js`: workspace resolution (env → config → legacy `./data` → `./workspace`).
+- `server/app.js`: API routes, independent of storage; `server/index.js`: local entry (file store); `api/index.js`: Vercel entry (cloud store).
+- `server/store-fs.js`: workspace files; `server/store-cloud.js` + `server/cloud-db.js`: hosted storage (Neon Postgres for JSON, private Vercel Blob for PDFs/imports); `server/auth.js`: shared password (`REVIEWHUB_PASSWORD`). Both stores implement the same interface; keep them in step.
+- `server/workspace.js`: workspace resolution (env → config → legacy `./data` → `./workspace`).
+- `scripts/cloud-sync.mjs`: `rh cloud-list | pull | push` between the hosted version and the local workspace. See `docs/HOSTING.md`.
 - `src/lib/model.js`: data model, final-decision logic, pools; `src/lib/methods.js`: method profiles (review types, frameworks, charting templates, appraisal tools); `src/lib/prisma.js`: PRISMA counts; `src/lib/progress.js`: step completion, shared by sidebar and overview; `src/lib/analysis.js`: evidence maps and networks; `src/lib/store.jsx`: client state and saving.
 - `src/pages/*`: one page per sidebar step; `src/components/*`: shared UI.
 

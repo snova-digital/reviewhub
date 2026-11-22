@@ -2,7 +2,7 @@
 // The shared part (protocol, records, reviewers, consensus, codebook) goes to review.json; each reviewer's
 // decisions (review.decisions[reviewerId]) go to their own file, so two reviewers never overwrite each other.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api } from './api.js';
+import { api, SIGNED_IN_EVENT } from './api.js';
 import { decisionsOf, reviewerById } from './model.js';
 
 const Ctx = createContext(null);
@@ -103,6 +103,13 @@ export function ReviewProvider({ id, children }) {
     const warn = (e) => { if (timer.current) { persist(); e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
+  }, [persist]);
+
+  // Hosted version: a save that failed because the session ran out is retried after signing in again.
+  useEffect(() => {
+    const retry = () => { persist(); };
+    window.addEventListener(SIGNED_IN_EVENT, retry);
+    return () => window.removeEventListener(SIGNED_IN_EVENT, retry);
   }, [persist]);
 
   // Pull the latest files from disk (e.g. the co-reviewer's decisions). Saves pending changes first.

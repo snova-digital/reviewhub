@@ -5,3 +5,5 @@ data/
 workspace/
 reviewhub.config.json
 .DS_Store
+.vercel
+.env*

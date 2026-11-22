@@ -137,6 +137,13 @@ const commands = {
   paper <review> [--out <file>]          write the paper data JSON (final values for all figures and tables)
                                          to <review>/exports/paper-data.json
 
+Hosted version (Neon + Vercel Blob; needs .env.local from \`vercel env pull .env.local\`, see docs/HOSTING.md):
+  cloud-list                             reviews stored online
+  pull <review> [--force]                copy an online review into the local workspace (refuses to replace
+                                         unpushed local changes unless --force; always snapshots to backups/)
+  push <review>                          upload local changes: your decisions, agent logs, PDFs/imports, and
+                                         review.json if nobody changed it online since your last pull
+
 <review> is a review id or a unique part of its title; <r> is a reviewer id or name.`);
   },
 
@@ -328,6 +335,23 @@ const commands = {
     out({ added, skipped: list.length - added, note: 'Reload the browser tab if the review is open.' });
   },
 
+  async 'cloud-list'() {
+    const { cloudList } = await import('./cloud-sync.mjs');
+    out(await cloudList());
+  },
+
+  async pull() {
+    const { pull } = await import('./cloud-sync.mjs');
+    out({ ...(await pull(WS, pos[0], { force: !!opt.force })), note: 'Reload the browser tab if the review is open locally.' });
+  },
+
+  async push() {
+    const { push } = await import('./cloud-sync.mjs');
+    const res = await push(WS, findReview(pos[0]));
+    out(res);
+    if (res.conflicts.length) die(`${res.conflicts.length} part(s) were not uploaded (see "conflicts" above); everything else was.`);
+  },
+
   paper() {
     const id = findReview(pos[0]);
     const r = loadReview(id);
@@ -341,4 +365,4 @@ const commands = {
 
 if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') commands.help();
 else if (!commands[cmd]) die(`unknown command "${cmd}" (see: node scripts/rh.mjs help)`);
-else commands[cmd]();
+else Promise.resolve(commands[cmd]()).catch((e) => die(e.message));
