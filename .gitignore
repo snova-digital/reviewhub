@@ -1,0 +1,7 @@
+node_modules
+dist
+# user data: never part of the project
+data/
+workspace/
+reviewhub.config.json
+.DS_Store

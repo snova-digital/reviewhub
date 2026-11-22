@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use ReviewHub in your research, please cite it as below."
+title: "ReviewHub: a local tool for scoping, systematic and rapid literature reviews"
+type: software
+authors:
+  - family-names: Draheim
+    given-names: Lukas
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+version: 0.1.0
+date-released: 2026-11-22
+license: MIT
+repository-code: "https://github.com/snova-digital/reviewhub"
+abstract: >-
+  ReviewHub supports the full workflow of a literature review on your own computer:
+  protocol and eligibility framework (PCC, PICO, SPIDER, …), documented searches with
+  imports from bibliographic databases, deduplication, independent title/abstract and
+  full-text screening with calibration, inter-rater agreement (Cohen's kappa) and
+  consensus, data charting and coding, critical appraisal, a live PRISMA flow diagram,
+  evidence maps and co-occurrence networks. Human and LLM/agent reviewers work side by
+  side; agent decisions are stored with a per-criterion reasoning log.
+keywords:
+  - systematic review
+  - scoping review
+  - PRISMA
+  - JBI
+  - screening
+  - inter-rater agreement
+  - evidence map

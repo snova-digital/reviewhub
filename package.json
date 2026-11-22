@@ -1,0 +1,58 @@
+{
+  "name": "reviewhub",
+  "version": "0.1.0",
+  "description": "Local tool for scoping, systematic and rapid literature reviews: protocol, searches, deduplication, independent screening, extraction and coding, critical appraisal, inter-rater agreement, PRISMA flow, evidence maps and co-occurrence networks. Supports LLM/agent reviewers with reasoning logs.",
+  "license": "MIT",
+  "author": "Lukas Draheim",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snova-digital/reviewhub.git"
+  },
+  "homepage": "https://github.com/snova-digital/reviewhub#readme",
+  "bugs": {
+    "url": "https://github.com/snova-digital/reviewhub/issues"
+  },
+  "keywords": [
+    "systematic-review",
+    "scoping-review",
+    "prisma",
+    "prisma-scr",
+    "jbi",
+    "literature-review",
+    "screening",
+    "inter-rater-agreement",
+    "evidence-map",
+    "vosviewer",
+    "research-tool"
+  ],
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"node --watch server/index.js\" \"vite\"",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "rh": "node scripts/rh.mjs",
+    "serve": "vite build && node server/index.js"
+  },
+  "dependencies": {
+    "@fontsource/roboto": "^5.3.0",
+    "d3-force": "^3.0.1",
+    "express": "^4.22.3",
+    "multer": "^1.4.4",
+    "papaparse": "^5.7.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-pdf": "^9.2.1",
+    "react-router-dom": "^6.30.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^10.0.7",
+    "tailwindcss": "^4.3.5",
+    "vite": "^5.4.21"
+  }
+}
