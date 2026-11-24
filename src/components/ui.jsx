@@ -46,7 +46,7 @@ export function Field({ label, hint, children, className = '' }) {
 }
 
 const inputCls =
-  'w-full rounded-md border border-stone-300 bg-white px-2.5 py-1.5 text-sm shadow-xs placeholder:text-stone-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none';
+  'w-full rounded-md border border-stone-300 bg-white px-2.5 py-1.5 text-sm shadow-xs placeholder:text-stone-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none disabled:cursor-default disabled:bg-stone-50 disabled:text-stone-800 disabled:shadow-none';
 
 export const Input = ({ className = '', ...p }) => <input className={`${inputCls} ${className}`} {...p} />;
 export const Textarea = ({ rows = 3, className = '', ...p }) => <textarea rows={rows} className={`${inputCls} leading-relaxed ${className}`} {...p} />;

@@ -7,31 +7,35 @@ import { buildIndex, findDuplicate, addToIndex, recomputeDuplicates } from '../l
 import { guide, reviewSettings } from '../lib/methods.js';
 import { Badge, Button, Card, Empty, Field, Input, SectionTitle, Select, Textarea } from '../components/ui.jsx';
 import SearchBuilder from '../components/SearchBuilder.jsx';
+import { PlanBanner, ReadOnly, usePlanAccess } from '../components/PlanLock.jsx';
 
 export default function SearchesPage() {
   const { review, update } = useReview();
   const add = () => update((r) => ({ ...r, runs: [...r.runs, newRun()] }));
   const streams = reviewSettings(review).streams;
+  const { editable } = usePlanAccess();
   return (
     <div className="mx-auto max-w-5xl px-8 py-8">
+      <PlanBanner what="searches and imports" />
       <SectionTitle
         title="Search runs"
         hint={`Document one run per database/source exactly as executed (${guide(review, 'searchItem')}): platform, full search string, fields, limits and date. Then import the export file. Raw export files are archived unchanged.`}
-        actions={<Button tone="primary" onClick={add}>+ New search run</Button>}
+        actions={editable && <Button tone="primary" onClick={add}>+ New search run</Button>}
       />
-      <SearchBuilder streams={streams} />
+      <SearchBuilder streams={streams} readOnly={!editable} />
       {review.runs.length === 0 && <Empty title="No search runs yet">Create one run per database you searched.</Empty>}
       <div className="space-y-6">
-        {review.runs.map((run, i) => <RunCard key={run.id} run={run} n={i + 1} />)}
+        {review.runs.map((run, i) => <RunCard key={run.id} run={run} n={i + 1} editable={editable} />)}
       </div>
     </div>
   );
 }
 
-function RunCard({ run, n }) {
+function RunCard({ run, n, editable }) {
   const { review, update } = useReview();
+  const { manage } = usePlanAccess();
   const streams = reviewSettings(review).streams;
-  const [open, setOpen] = useState(!run.database);
+  const [open, setOpen] = useState(!run.database && editable);
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef();
@@ -133,6 +137,7 @@ function RunCard({ run, n }) {
 
       {open && (
         <div className="grid grid-cols-2 gap-4 p-5">
+          <ReadOnly when={!editable}>
           <Field label="Database / source">
             <Input list="dbs" value={run.database} onChange={(e) => set({ database: e.target.value })} placeholder="Scopus" />
             <datalist id="dbs">{DATABASES.map((d) => <option key={d} value={d} />)}</datalist>
@@ -161,13 +166,15 @@ function RunCard({ run, n }) {
               </Select>
             </Field>
           </>}
+          </ReadOnly>
           <div className="col-span-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wide text-stone-500">Search string (exactly as executed)</span>
               <Button size="sm" tone="ghost" onClick={() => navigator.clipboard?.writeText(run.searchString)}>Copy</Button>
             </div>
-            <div className="mt-1"><Textarea rows={6} value={run.searchString} onChange={(e) => set({ searchString: e.target.value })} className="font-mono text-xs" /></div>
+            <div className="mt-1"><Textarea rows={6} value={run.searchString} readOnly={!editable} onChange={(e) => set({ searchString: e.target.value })} className={`font-mono text-xs ${editable ? '' : 'bg-stone-50'}`} /></div>
           </div>
+          <ReadOnly when={!editable}>
           <Field label="Fields searched"><Input value={run.fields} onChange={(e) => set({ fields: e.target.value })} /></Field>
           <Field label="Date executed"><Input type="date" value={run.dateRun} onChange={(e) => set({ dateRun: e.target.value })} /></Field>
           <Field label="Publication date range"><Input value={run.dateRange} onChange={(e) => set({ dateRange: e.target.value })} placeholder="2010–2026" /></Field>
@@ -177,7 +184,10 @@ function RunCard({ run, n }) {
           <Field label="Limits / filters" className="col-span-2">
             <Input value={run.filters} onChange={(e) => set({ filters: e.target.value })} placeholder="Language: English; Document type: article, conference paper" />
           </Field>
-          <Field label="Notes" className="col-span-2"><Textarea rows={2} value={run.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>
+          </ReadOnly>
+          <ReadOnly when={!manage}>
+            <Field label="Notes" className="col-span-2" hint="Not part of the frozen plan."><Textarea rows={2} value={run.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>
+          </ReadOnly>
         </div>
       )}
 
@@ -198,20 +208,20 @@ function RunCard({ run, n }) {
                   <td className="tabular-nums">{imp.count}</td>
                   <td className="tabular-nums">{imp.duplicates}</td>
                   <td className="text-stone-500">{new Date(imp.importedAt).toLocaleString()}</td>
-                  <td className="text-right"><Button tone="ghost" size="sm" onClick={() => removeImport(imp)}>Remove</Button></td>
+                  <td className="text-right">{editable && <Button tone="ghost" size="sm" onClick={() => removeImport(imp)}>Remove</Button>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-        <div className="flex items-center justify-between">
+        {editable && <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <input ref={fileRef} type="file" accept=".ris,.bib,.nbib,.txt,.csv,.tsv" className="hidden" onChange={onFile} />
             <Button tone="primary" size="sm" onClick={() => fileRef.current.click()}>Import results file…</Button>
             <span className="text-xs text-stone-500">RIS · BibTeX · CSV/TSV (Scopus, WoS, IEEE) · PubMed .nbib · WoS plain text</span>
           </div>
           <Button tone="ghost" size="sm" onClick={removeRun}>Delete run</Button>
-        </div>
+        </div>}
       </div>
 
       {preview && (

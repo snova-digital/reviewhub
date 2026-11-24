@@ -7,6 +7,7 @@ import { reviewSettings } from '../lib/methods.js';
 import { attachPdf, matchPdf } from '../lib/pdfs.js';
 import { DECISION_LABEL, finalDecision } from '../lib/model.js';
 import { Badge, Button, Card, Input, SectionTitle, Select } from '../components/ui.jsx';
+import { canManage, leadsOf } from '../lib/lock.js';
 
 const FILTERS = {
   all: ['All records', () => true],
@@ -22,7 +23,8 @@ const FILTERS = {
 };
 
 export default function RecordsPage() {
-  const { review, update } = useReview();
+  const { review, update, me } = useReview();
+  const manage = canManage(review, me);
   const [filter, setFilter] = useState('unique');
   const [q, setQ] = useState('');
   const [limit, setLimit] = useState(100);
@@ -61,7 +63,7 @@ export default function RecordsPage() {
     <div className="px-8 py-8">
       <SectionTitle
         title="Records"
-        hint="All imported records. Duplicates were detected by DOI or normalised title + year and are excluded from screening; override any false positives here."
+        hint={`All imported records. Duplicates were detected by DOI or normalised title + year and are excluded from screening; ${manage ? 'override any false positives here' : `only the lead reviewer (${leadsOf(review).map((r) => r.name).join(', ')}) can override duplicate flags`}. Everyone can attach PDFs.`}
         actions={<>
           <input ref={bulkRef} type="file" multiple accept="application/pdf" className="hidden" onChange={onBulk} />
           <Button onClick={() => bulkRef.current.click()}>Attach PDFs in bulk…</Button>
@@ -103,7 +105,7 @@ export default function RecordsPage() {
           <tbody>
             {rows.slice(0, limit).map((r) => (
               <RecordRow key={r.id} r={r} review={review} runName={runName} byId={byId}
-                open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} onToggleDup={() => toggleDup(r)} update={update} />
+                open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} onToggleDup={manage ? () => toggleDup(r) : null} update={update} />
             ))}
           </tbody>
         </table>
@@ -158,7 +160,7 @@ function RecordRow({ r, review, runName, byId, open, onToggle, onToggleDup, upda
               {r.pdf && <a className="text-indigo-700 hover:underline" href={api.pdfUrl(review.id, r.id)} target="_blank" rel="noreferrer">Open PDF</a>}
               <input ref={fileRef} type="file" accept="application/pdf" className="hidden" onChange={onFile} />
               <Button size="sm" onClick={(e) => { e.stopPropagation(); fileRef.current.click(); }}>{r.pdf ? 'Replace PDF' : 'Attach PDF'}</Button>
-              {(r.duplicateOf || r.notDuplicate) && (
+              {onToggleDup && (r.duplicateOf || r.notDuplicate) && (
                 <Button size="sm" onClick={(e) => { e.stopPropagation(); onToggleDup(); }}>{r.duplicateOf ? 'Not a duplicate' : 'Re-check duplicate'}</Button>
               )}
               {!r.duplicateOf && <Link to={`../screen/ta?rec=${r.id}`}><Button size="sm">Screen T/A</Button></Link>}

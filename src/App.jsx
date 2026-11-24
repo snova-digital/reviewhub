@@ -12,6 +12,8 @@ import ExportPage from './pages/ExportPage.jsx';
 import ReviewersPage, { ReviewerGate } from './pages/ReviewersPage.jsx';
 import ComparePage from './pages/ComparePage.jsx';
 import TopBar from './components/TopBar.jsx';
+import { LockStatus, StartChoice, WorkGate } from './components/PlanLock.jsx';
+import { useScope } from './components/Screening.jsx';
 
 const ScreeningFT = lazy(() => import('./pages/ScreeningFT.jsx'));
 const CodingPage = lazy(() => import('./pages/CodingPage.jsx'));
@@ -30,19 +32,26 @@ export default function App() {
         <Route path="protocol" element={<ProtocolPage />} />
         <Route path="searches" element={<SearchesPage />} />
         <Route path="records" element={<RecordsPage />} />
-        <Route path="screen/ta" element={<ScreeningTA />} />
-        <Route path="screen/ft" element={<ScreeningFT />} />
-        <Route path="code" element={<CodingPage />} />
-        <Route path="appraise" element={<AppraisalPage />} />
+        <Route path="screen/ta" element={<ScreeningGate stage="ta"><ScreeningTA /></ScreeningGate>} />
+        <Route path="screen/ft" element={<ScreeningGate stage="ft"><ScreeningFT /></ScreeningGate>} />
+        <Route path="code" element={<WorkGate><CodingPage /></WorkGate>} />
+        <Route path="appraise" element={<WorkGate><AppraisalPage /></WorkGate>} />
         <Route path="results" element={<ResultsPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="compare" element={<ComparePage />} />
+        <Route path="compare" element={<WorkGate allowBeforeStart><ComparePage /></WorkGate>} />
         <Route path="reviewers" element={<ReviewersPage />} />
         <Route path="export" element={<ExportPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>
   );
+}
+
+// Screening needs a started review with no unresolved plan changes. Before the start, title/abstract screening
+// shows the choice between an optional calibration round and the full review.
+function ScreeningGate({ stage, children }) {
+  const [scope] = useScope();
+  return <WorkGate scope={scope} beforeStart={stage === 'ta' ? <StartChoice /> : null}>{children}</WorkGate>;
 }
 
 function ReviewShell() {
@@ -76,6 +85,7 @@ function Sidebar() {
       {/* After a mouse click, release focus from the link: otherwise the screening shortcuts (I/E/F, Enter)
           switch the browser to keyboard mode and draw a focus outline around the sidebar entry. */}
       <nav className="flex-1 py-4" onClick={(e) => { if (e.detail > 0) e.target.closest('a')?.blur(); }}>
+        <LockStatus />
         <NavLink to="" end className={link('teal')}>
           <span className="flex h-5 w-5 items-center justify-center text-stone-400" aria-hidden>◎</span>overview
         </NavLink>

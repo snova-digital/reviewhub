@@ -29,13 +29,15 @@ export const fmtK = (k) => (k == null ? '–' : k.toFixed(2));
 
 // Decision maps for two reviewers over the same stage → overlap, decision kappa, binary (exclude vs. forward) kappa,
 // per-criterion kappa and confusion matrix.
-export function comparePair(mapA, mapB, { criteria = [], ids = null, categories = [] } = {}) {
+export function comparePair(mapA, mapB, { criteria = [], ids = null, categories = [], stateOf = null } = {}) {
   const shared = Object.keys(mapA).filter((id) => mapB[id] && (!ids || ids.has(id)));
   const pairs = shared.map((id) => [mapA[id].decision, mapB[id].decision]);
   const binary = pairs.map(([a, b]) => [a === 'exclude' ? 'exclude' : 'forward', b === 'exclude' ? 'exclude' : 'forward']);
   // A criterion nobody ticked has trivial 100% agreement; report it as unused instead of κ = 1.
+  // Ticked criteria: ticked vs. not. Paired criteria: meets / unclear / fails / not judged (needs `stateOf`).
   const perCriterion = criteria.map((c) => {
-    const pr = shared.map((id) => [mapA[id].checked?.includes(c.id) ? 1 : 0, mapB[id].checked?.includes(c.id) ? 1 : 0]);
+    const val = (d) => (c.kind === 'paired' && stateOf ? stateOf(d, c) || '' : d.checked?.includes(c.id) ? 1 : 0);
+    const pr = shared.map((id) => [val(mapA[id]), val(mapB[id])]);
     return pr.some(([a, b]) => a || b) ? { criterion: c, used: true, ...cohen(pr) } : { criterion: c, used: false, n: pr.length, agree: null, kappa: null };
   });
   const matrix = categories.map((ca) => categories.map((cb) => pairs.filter(([a, b]) => a === ca && b === cb).length));

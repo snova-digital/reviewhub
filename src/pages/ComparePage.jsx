@@ -1,8 +1,9 @@
 // Comparison step: independent decisions side by side, inter-rater agreement, and consensus.
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useReview } from '../lib/store.jsx';
 import {
-  codingPool, criteriaFor, criteriaHash, criterionCode, DECISION_LABEL, DECISIONS, decisionsOf, finalCoding, finalDecision, groupCodes, isAssigned, isHuman, stagePool,
+  codingPool, criteriaFor, criteriaHash, criterionCode, criterionState, reasonCriteria, reasonLabel, DECISION_LABEL, DECISIONS, decisionsOf, finalCoding, finalDecision, groupCodes, isAssigned, isHuman, stagePool,
 } from '../lib/model.js';
 import { comparePair, compareCoding, fmtK, kappaBand, pct } from '../lib/agreement.js';
 import { guide } from '../lib/methods.js';
@@ -47,7 +48,8 @@ const LIST_FILTERS = {
 export default function ComparePage() {
   const { review, reload, status, update } = useReview();
   const [stage, setStage] = useState('ta');
-  const [scope, setScope] = useState('screening');
+  const [params] = useSearchParams();
+  const [scope, setScope] = useState(params.get('cal') ? 'calibration' : 'screening');
   const isCoding = stage === 'coding';
   const sc = isCoding ? 'screening' : scope;
 
@@ -69,7 +71,7 @@ export default function ComparePage() {
   const cats = isCoding ? [] : DECISIONS[stage].map((d) => d.value);
   const pair = useMemo(() => {
     if (!A || !B) return null;
-    return isCoding ? compareCoding(maps[A.id], maps[B.id], review.codebook) : comparePair(maps[A.id], maps[B.id], { criteria: crit, categories: cats });
+    return isCoding ? compareCoding(maps[A.id], maps[B.id], review.codebook) : comparePair(maps[A.id], maps[B.id], { criteria: crit, categories: cats, stateOf: criterionState });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [A, B, maps, crit, isCoding, review.codebook]);
 
@@ -181,15 +183,15 @@ function ScreeningStats({ pair, stage, cats, A, B }) {
           </table>
         </Card>
         <Card className="overflow-hidden">
-          <div className="px-4 pt-3 text-xs font-medium uppercase tracking-wide text-stone-500">Agreement per criterion (ticked vs. not ticked)</div>
+          <div className="px-4 pt-3 text-xs font-medium uppercase tracking-wide text-stone-500">Agreement per criterion (ticked vs. not; paired: meets / unclear / fails)</div>
           <table className="mt-1 w-full text-sm">
             <tbody>{pair.perCriterion.map((pc) => (
               <tr key={pc.criterion.id} className="border-t border-stone-100">
-                <td className="max-w-md px-4 py-1.5"><b className="mr-1 text-stone-500">{criterionCode(review, pc.criterion.id)}</b><span className="line-clamp-1 inline">{pc.criterion.text}</span></td>
+                <td className="max-w-md px-4 py-1.5"><b className="mr-1 text-stone-500">{criterionCode(review, pc.criterion.id)}</b><span className="line-clamp-1 inline">{pc.criterion.text}</span>{pc.criterion.kind === 'paired' && <span className="ml-1 text-[10px] uppercase text-stone-400">paired</span>}</td>
                 {pc.used ? <>
                   <td className="w-16 tabular-nums">{pct(pc.agree)}</td>
                   <td className={`w-36 pr-4 tabular-nums ${pc.kappa != null && pc.kappa < 0.4 ? 'text-rose-700' : ''}`}>κ {fmtK(pc.kappa)} <span className="text-xs text-stone-400">{kappaBand(pc.kappa)}</span></td>
-                </> : <td colSpan={2} className="pr-4 text-xs text-stone-400">not ticked by either</td>}
+                </> : <td colSpan={2} className="pr-4 text-xs text-stone-400">not used by either</td>}
               </tr>
             ))}</tbody>
           </table>
@@ -297,9 +299,9 @@ function RecordDetail({ x, stage, scope, crit }) {
   const [decision, setDecision] = useState(existing?.decision || '');
   const [reason, setReason] = useState(existing?.reason || '');
   const [note, setNote] = useState(existing?.note || '');
-  const excl = crit.filter((c) => c.kind === 'exclusion');
-  const allChecked = x.votes.map((v) => new Set(v.d.checked || []));
-  const differs = (cid) => allChecked.some((s) => s.has(cid)) && !allChecked.every((s) => s.has(cid));
+  const excl = reasonCriteria(review, stage);
+  // A criterion differs when reviewers judged it differently (ticked vs. not, or meets / unclear / fails).
+  const differs = (c) => new Set(x.votes.map((v) => criterionState(v.d, c) || '')).size > 1;
 
   const save = () => update((r) => ({
     ...r,
@@ -327,12 +329,16 @@ function RecordDetail({ x, stage, scope, crit }) {
             <Card key={v.rv.id} className="space-y-2 p-3">
               <div className="flex items-center justify-between"><b>{v.rv.name}{v.rv.type === 'llm' ? ' (LLM)' : ''}</b><Badge tone={v.d.decision}>{DECISION_LABEL[v.d.decision]}</Badge></div>
               <div className="flex flex-wrap gap-1">
-                {crit.filter((c) => v.d.checked?.includes(c.id)).map((c) => (
-                  <span key={c.id} title={c.text} className={`rounded px-1.5 py-0.5 text-[11px] ring-1 ${differs(c.id) ? 'bg-amber-100 text-amber-900 ring-amber-300' : c.kind === 'inclusion' ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-rose-50 text-rose-800 ring-rose-200'}`}>
-                    {criterionCode(review, c.id)}
-                  </span>
-                ))}
-                {!v.d.checked?.length && <span className="text-xs text-stone-400">no criteria ticked</span>}
+                {crit.filter((c) => criterionState(v.d, c)).map((c) => {
+                  const st = criterionState(v.d, c);
+                  const tone = st === 'meets' ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : st === 'unclear' ? 'bg-stone-100 text-stone-700 ring-stone-300' : 'bg-rose-50 text-rose-800 ring-rose-200';
+                  return (
+                    <span key={c.id} title={`${c.text}${c.kind === 'paired' ? ` (${st})` : ''}`} className={`rounded px-1.5 py-0.5 text-[11px] ring-1 ${differs(c) ? 'bg-amber-100 text-amber-900 ring-amber-300' : tone}`}>
+                      {criterionCode(review, c.id)}{c.kind === 'paired' && ` ${{ meets: '✓', unclear: '?', fails: '✗' }[st]}`}
+                    </span>
+                  );
+                })}
+                {!crit.some((c) => criterionState(v.d, c)) && <span className="text-xs text-stone-400">no criteria ticked</span>}
               </div>
               {v.d.reason && <div className="text-xs text-rose-800">Reason: {criterionCode(review, v.d.reason)}</div>}
               {v.d.note && <div className="text-xs italic text-stone-600">“{v.d.note}”</div>}
@@ -342,7 +348,7 @@ function RecordDetail({ x, stage, scope, crit }) {
           );
         })}
       </div>
-      <div className="text-xs text-stone-400">Amber criteria were ticked by some reviewers but not others.</div>
+      <div className="text-xs text-stone-400">Amber criteria were judged differently by the reviewers (✓ meets, ? unclear, ✗ fails for paired criteria).</div>
       {scope === 'screening' && (
         <Card className="space-y-3 p-4">
           <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Consensus decision {existing && <span className="font-normal normal-case">: set by {existing.decidedBy} on {new Date(existing.decidedAt).toLocaleDateString()}</span>}</div>
@@ -354,7 +360,7 @@ function RecordDetail({ x, stage, scope, crit }) {
           {decision === 'exclude' && (
             <Select value={reason} onChange={(e) => setReason(e.target.value)}>
               <option value="">Primary exclusion reason…</option>
-              {excl.map((c) => <option key={c.id} value={c.id}>{criterionCode(review, c.id)}: {c.text}</option>)}
+              {excl.map((c) => <option key={c.id} value={c.id}>{reasonLabel(review, c.id)}</option>)}
             </Select>
           )}
           <Textarea rows={2} placeholder="How the disagreement was resolved (discussion, third reviewer, clarified criterion…)" value={note} onChange={(e) => setNote(e.target.value)} />

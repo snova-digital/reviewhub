@@ -5,7 +5,7 @@ import { api } from '../lib/api.js';
 import { buildPaperData } from '../lib/paperData.js';
 import { guide, reviewSettings } from '../lib/methods.js';
 import { prismaCounts } from '../lib/prisma.js';
-import { codingPool, criterionCode, criterionLabel, DECISION_LABEL, decisionsOf, fieldText, finalAppraisal, finalCoding, finalDecision, finalField, ftPool, runLabel, uniqueRecords } from '../lib/model.js';
+import { codingPool, criteriaFor, criterionCode, criterionLabel, criterionState, DECISION_LABEL, findCriterion, reasonLabel, decisionsOf, fieldText, finalAppraisal, finalCoding, finalDecision, finalField, ftPool, runLabel, uniqueRecords } from '../lib/model.js';
 import { comparePair, compareCoding, kappaBand } from '../lib/agreement.js';
 import { Button, Card, SectionTitle } from '../components/ui.jsx';
 
@@ -37,13 +37,15 @@ export default function ExportPage() {
     const row = {
       record_id: r.id, title: r.title, authors: r.authors.join('; '), year: r.year, journal: r.journal, doi: r.doi, source: runName[r.runId],
       final_decision: fin.decision ? DECISION_LABEL[fin.decision] : '', final_status: fin.status,
-      final_exclusion_reason: fin.reason ? criterionLabel(review, fin.reason) : '',
+      final_exclusion_reason: fin.reason ? reasonLabel(review, fin.reason) : '',
       consensus_note: review.consensus?.[stage]?.[r.id]?.note || '',
     };
     for (const rv of reviewers) {
       const d = dec(rv).screening[stage][r.id];
       row[`${col(rv)}_decision`] = d ? DECISION_LABEL[d.decision] : '';
-      row[`${col(rv)}_criteria`] = d ? d.checked.map((id) => criterionCode(review, id)).join(' ') : '';
+      // Ticked criteria by code; paired criteria as CODE=meets|unclear|fails.
+      row[`${col(rv)}_criteria`] = d ? criteriaFor(review, stage).filter((c) => criterionState(d, c))
+        .map((c) => (c.kind === 'paired' ? `${criterionCode(review, c.id)}=${criterionState(d, c)}` : criterionCode(review, c.id))).join(' ') : '';
       row[`${col(rv)}_reason`] = d?.reason ? criterionCode(review, d.reason) : '';
       row[`${col(rv)}_note`] = d?.note || '';
     }
@@ -127,12 +129,18 @@ export default function ExportPage() {
     '', ...review.runs.flatMap((r, i) => [`## ${i + 1}. ${runLabel(r)}`, '', '```', r.searchString, '```', r.notes ? `\n${r.notes}` : '', '']),
   ].join('\n');
 
-  // How often each criterion was ticked: useful to report & refine criteria.
+  // How often each criterion was ticked (paired: met / unclear / failed): useful to report & refine criteria.
+  const usage = (stage, cr) => {
+    const states = reviewers.flatMap((rv) => Object.values(dec(rv).screening[stage]).map((d) => criterionState(d, cr)));
+    if (cr.kind !== 'paired') return states.filter(Boolean).length;
+    const n = (s) => states.filter((x) => x === s).length;
+    return `${n('meets')} ✓ · ${n('unclear')} ? · ${n('fails')} ✗`;
+  };
   const critStats = review.criteria.map((cr) => ({
-    code: criterionCode(review, cr.id), text: cr.text,
-    ta: reviewers.reduce((n, rv) => n + Object.values(dec(rv).screening.ta).filter((d) => d.checked.includes(cr.id)).length, 0),
-    ft: reviewers.reduce((n, rv) => n + Object.values(dec(rv).screening.ft).filter((d) => d.checked.includes(cr.id)).length, 0),
-    reason: ftPool(review).filter((r) => finalDecision(review, 'ft', r.id).decision === 'exclude' && finalDecision(review, 'ft', r.id).reason === cr.id).length,
+    code: criterionCode(review, cr.id), text: cr.kind === 'paired' && cr.excludeText ? `${cr.text} / not: ${cr.excludeText}` : cr.text,
+    ta: usage('ta', cr),
+    ft: usage('ft', cr),
+    reason: ftPool(review).filter((r) => { const f = finalDecision(review, 'ft', r.id); return f.decision === 'exclude' && f.reason && findCriterion(review, f.reason)?.id === cr.id; }).length,
   }));
 
   const exports = [

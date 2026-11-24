@@ -10,12 +10,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { resolveWorkspace, ROOT } from '../server/workspace.js';
 import {
-  calibrationSet, codebookLogEntry, codingPool, criteriaFor, criteriaHash, criterionCode, decisionsOf, emptyDecisions,
+  calibrationSet, canBeReason, codebookLogEntry, codingPool, criteriaFor, criteriaHash, criterionCode, decisionsOf, emptyDecisions,
   ftPool, isAssigned, newCode, newReviewer, uniqueRecords,
 } from '../src/lib/model.js';
 import { frameworkElements, frameworkValues, profileOf, reviewSettings } from '../src/lib/methods.js';
 import { prismaCounts } from '../src/lib/prisma.js';
 import { buildPaperData } from '../src/lib/paperData.js';
+import { calibrationStarted, isStarted, leadsOf, planChanges, workBlock } from '../src/lib/lock.js';
 
 const WS = resolveWorkspace();
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
@@ -105,6 +106,15 @@ const readJsonl = (file) => {
     .map(([l, n]) => { try { return JSON.parse(l); } catch (e) { return die(`${file}:${n}: invalid JSON (${e.message})`); } });
 };
 
+// Same rule as the app: no main screening/coding before the lead has started the review, and nothing at all while
+// changes to the frozen plan are unresolved.
+function assertCanWork(review, scope) {
+  const block = workBlock(review, scope);
+  if (block === 'paused') die(`screening is paused: the plan changed since the review started (${planChanges(review).map((c) => c.label).join('; ')}). The lead reviewer has to resolve this in the app first.`);
+  if (block === 'not-started') die('the full review has not been started yet: only --scope calibration (once the lead has started a calibration round) is possible until the lead starts the full review in step 4.');
+  if (block === 'calibration-not-started') die('no calibration round has been started: the lead reviewer starts it in step 4 (title / abstract screening).');
+}
+
 function reviewerOf(review, q) {
   if (!q || q === true) die(`missing --reviewer <id or name>. Reviewers: ${review.reviewers.map((r) => `${r.id} (${r.name})`).join(', ') || 'none'}`);
   const rv = review.reviewers.find((r) => r.id === q) || review.reviewers.find((r) => r.name.toLowerCase() === String(q).toLowerCase());
@@ -137,6 +147,13 @@ const commands = {
   paper <review> [--out <file>]          write the paper data JSON (final values for all figures and tables)
                                          to <review>/exports/paper-data.json
 
+Hosted version (Neon + Vercel Blob; needs .env.local from \`vercel env pull .env.local\`, see docs/HOSTING.md):
+  cloud-list                             reviews stored online
+  pull <review> [--force]                copy an online review into the local workspace (refuses to replace
+                                         unpushed local changes unless --force; always snapshots to backups/)
+  push <review>                          upload local changes: your decisions, agent logs, PDFs/imports, and
+                                         review.json if nobody changed it online since your last pull
+
 <review> is a review id or a unique part of its title; <r> is a reviewer id or name.`);
   },
 
@@ -155,7 +172,7 @@ const commands = {
     const p = profileOf(r);
     const c = prismaCounts(r);
     const values = frameworkValues(r);
-    const crit = (stage) => criteriaFor(r, stage).map((x) => ({ code: criterionCode(r, x.id), kind: x.kind, element: x.element, group: x.group || null, text: x.text }));
+    const crit = (stage) => criteriaFor(r, stage).map((x) => ({ code: criterionCode(r, x.id), kind: x.kind, element: x.element, group: x.group || null, text: x.text, ...(x.kind === 'paired' ? { excludeText: x.excludeText || '' } : {}) }));
     out({
       id, title: r.title, type: r.type, methodology: p.methodology, guideline: p.guideline, folder: reviewDir(id),
       protocol: {
@@ -168,9 +185,19 @@ const commands = {
       decisionRules: {
         ta: 'decision: include | unclear (= review with full text) | exclude. Exclusion criteria met → exclude. Ambiguous → unclear.',
         ft: 'decision: include | exclude | not_retrieved. Exclude requires "reason" = code of the primary exclusion criterion.',
+        paired: 'Paired criteria (kind "paired") have an inclusion side (text) and an exclusion side (excludeText). Judge each: met "yes" = inclusion side fits, "no" = exclusion side fits (it fails; its code can be the exclusion reason), "unclear" = neither clearly. All paired criteria met → include; any failing → exclude; otherwise unclear.',
         groups: 'Inclusion criteria sharing a group: at least one of the group must be met; ungrouped inclusion criteria must all be met.',
       },
-      reviewers: r.reviewers.map((x) => ({ id: x.id, name: x.name, type: x.type, model: x.model, assignment: x.assignment })),
+      status: {
+        started: isStarted(r), startedAt: r.lock?.startedAt || null, leads: leadsOf(r).map((x) => x.name),
+        calibration: calibrationStarted(r) ? {
+          method: r.calibration?.seed ? 'random' : 'first-n', seed: r.calibration?.seed || null,
+          stream: r.settings?.calibrationStream || null, records: calibrationSet(r, 'ta').length,
+        } : null,
+        pausedBy: planChanges(r).map((x) => x.label),
+        amendments: (r.lock?.log || []).filter((e) => e.kind !== 'start').map((e) => ({ kind: e.kind, at: e.at, reason: e.reason })),
+      },
+      reviewers: r.reviewers.map((x) => ({ id: x.id, name: x.name, type: x.type, lead: !!x.lead, model: x.model, assignment: x.assignment })),
       codebook: r.codebook.map((x) => ({ id: x.id, group: x.group, label: x.label, definition: x.description, whenToUse: x.whenToUse, whenNotToUse: x.whenNotToUse, origin: x.origin })),
       chartingForm: (r.chartingForm || []).map((f) => ({ id: f.id, label: f.label, type: f.type, options: (f.options || []).filter((o) => o.trim()), help: f.help })),
       progress: { identified: c.identified, unique: c.unique, taScreened: c.taScreened, taConflicts: c.taConflicts, ftPool: c.sought, ftAssessed: c.assessed, included: c.ftIncluded },
@@ -207,6 +234,8 @@ const commands = {
       }));
     }
     console.error(`${recs.length} record(s) · stage ${stage} · ${scope} · reviewer ${rv.name}`);
+    const block = workBlock(r, scope);
+    if (block) console.error(`warning: ${{ paused: 'screening is paused (the plan changed since the start)', 'not-started': 'the full review has not been started (only --scope calibration)', 'calibration-not-started': 'no calibration round has been started' }[block]}; decide/code will refuse until the lead resolves it.`);
   },
 
   decide() {
@@ -216,6 +245,7 @@ const commands = {
     const stage = opt.stage;
     if (!['ta', 'ft'].includes(stage)) die('--stage must be ta or ft');
     const scope = opt.scope === 'calibration' ? 'calibration' : 'screening';
+    assertCanWork(r, scope);
     const codeToId = Object.fromEntries(criteriaFor(r, stage).map((c) => [criterionCode(r, c.id).toLowerCase(), c.id]));
     const valid = stage === 'ta' ? { include: 'include', unclear: 'unclear', fulltext: 'unclear', exclude: 'exclude' } : { include: 'include', exclude: 'exclude', not_retrieved: 'not_retrieved' };
     const pool = new Set((stage === 'ta' ? uniqueRecords(r) : ftPool(r)).map((x) => x.id));
@@ -235,11 +265,16 @@ const commands = {
       if (unknown.length) { errors.push(`${where}: unknown criterion code(s) ${unknown.join(', ')}`); continue; }
       if (crit.some((c) => !['yes', 'no', 'unclear'].includes(c.met))) { errors.push(`${where}: criteria[].met must be yes, no or unclear`); continue; }
       const reason = e.reason ? codeToId[String(e.reason).toLowerCase()] : null;
+      if (reason && !canBeReason(r.criteria.find((c) => c.id === reason))) { errors.push(`${where}: reason ${e.reason} is not an exclusion or paired criterion`); continue; }
       if (stage === 'ft' && decision === 'exclude' && !reason) { errors.push(`${where}: full-text exclusion needs "reason" (code of an exclusion criterion)`); continue; }
       const confidence = e.confidence == null ? null : Number(e.confidence);
       const agent = { source: 'cli', runId, criteriaHash: hash, confidence: Number.isFinite(confidence) ? confidence : null, rationale: e.rationale || '', criteria: crit };
+      // Paired criteria: yes → meets, no → fails, unclear → unclear. Plain criteria: yes → ticked.
+      const STATE = { yes: 'meets', no: 'fails', unclear: 'unclear' };
+      const marks = Object.fromEntries(crit.filter((c) => r.criteria.find((x) => x.id === codeToId[c.code.toLowerCase()])?.kind === 'paired')
+        .map((c) => [codeToId[c.code.toLowerCase()], STATE[c.met]]));
       decided[e.recordId] = {
-        decision, checked: crit.filter((c) => c.met === 'yes').map((c) => codeToId[c.code.toLowerCase()]), reason: decision === 'exclude' ? reason : null,
+        decision, checked: crit.filter((c) => c.met === 'yes').map((c) => codeToId[c.code.toLowerCase()]), ...(Object.keys(marks).length ? { marks } : {}), reason: decision === 'exclude' ? reason : null,
         note: e.note || '', reviewer: rv.name, decidedAt: new Date().toISOString(), agent,
       };
       logs.push({ type: 'decision', recordId: e.recordId, stage, scope, inputs: e.inputs || null, criteria: crit, decision, reason: e.reason || null, confidence: agent.confidence, rationale: agent.rationale, note: e.note || '', at: new Date().toISOString() });
@@ -266,6 +301,7 @@ const commands = {
     const id = findReview(pos[0]);
     const r = loadReview(id);
     const rv = reviewerOf(r, opt.reviewer);
+    assertCanWork(r, 'screening');
     const pool = new Set(codingPool(r).map((x) => x.id));
     const codeId = (q) => { const s = String(q).toLowerCase(); return r.codebook.find((c) => c.id === q || c.label.toLowerCase() === s)?.id; };
     const fields = r.chartingForm || [];
@@ -328,6 +364,23 @@ const commands = {
     out({ added, skipped: list.length - added, note: 'Reload the browser tab if the review is open.' });
   },
 
+  async 'cloud-list'() {
+    const { cloudList } = await import('./cloud-sync.mjs');
+    out(await cloudList());
+  },
+
+  async pull() {
+    const { pull } = await import('./cloud-sync.mjs');
+    out({ ...(await pull(WS, pos[0], { force: !!opt.force })), note: 'Reload the browser tab if the review is open locally.' });
+  },
+
+  async push() {
+    const { push } = await import('./cloud-sync.mjs');
+    const res = await push(WS, findReview(pos[0]));
+    out(res);
+    if (res.conflicts.length) die(`${res.conflicts.length} part(s) were not uploaded (see "conflicts" above); everything else was.`);
+  },
+
   paper() {
     const id = findReview(pos[0]);
     const r = loadReview(id);
@@ -341,4 +394,4 @@ const commands = {
 
 if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') commands.help();
 else if (!commands[cmd]) die(`unknown command "${cmd}" (see: node scripts/rh.mjs help)`);
-else commands[cmd]();
+else Promise.resolve(commands[cmd]()).catch((e) => die(e.message));

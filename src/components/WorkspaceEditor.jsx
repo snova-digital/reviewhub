@@ -40,6 +40,17 @@ export default function WorkspaceEditor({ onChanged, compact = false }) {
   }
 
   if (!info) return <div className="text-sm text-stone-500">Loading…</div>;
+  if (info.storage === 'cloud') {
+    return (
+      <div className="space-y-3">
+        <div className="bg-stone-100 px-4 py-3 text-[13px]">{info.workspace}{count ? <span className="ml-2 text-xs text-stone-500">· {count} review{count === 1 ? '' : 's'}</span> : null}</div>
+        <p className="text-sm text-stone-600">
+          This is the hosted ReviewHub: reviews are stored in its cloud database, shared by everyone with the password.
+          To work on a review locally, use <code>rh pull</code> and <code>rh push</code> in a local copy (see <code>docs/HOSTING.md</code>).
+        </p>
+      </div>
+    );
+  }
   const changed = value.trim() && value.trim() !== info.workspace;
 
   return (

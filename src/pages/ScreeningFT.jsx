@@ -36,7 +36,8 @@ export default function ScreeningFT() {
   const setEvidence = (fn) => updateMine((d) => ({ ...d, evidence: { ...(d.evidence || {}), [r.id]: fn(d.evidence?.[r.id] || []) } }));
   const addHighlight = (h) => {
     setEvidence((list) => [...list, { id: uid('hl'), source: 'pdf', ...h, stage: 'ft', scope, createdAt: new Date().toISOString() }]);
-    if (h.criterionId && !form.checked.includes(h.criterionId)) form.toggle(h.criterionId);
+    // Evidence ticks a plain criterion; a paired one stays for the reviewer to judge (the passage may support either side).
+    if (h.criterionId && !form.pairedIds.includes(h.criterionId) && !form.checked.includes(h.criterionId)) form.toggle(h.criterionId);
   };
   const removeHighlight = (id) => setEvidence((list) => list.filter((h) => h.id !== id));
   const relinkHighlight = (id, criterionId) => setEvidence((list) => list.map((h) => (h.id === id ? { ...h, criterionId: criterionId || null } : h)));

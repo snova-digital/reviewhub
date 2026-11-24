@@ -4,7 +4,7 @@
 // Plain ESM without browser APIs, so Node can import it.
 import { prismaCounts } from './prisma.js';
 import { cohen, compareCoding, comparePair } from './agreement.js';
-import { codingPool, criterionCode, criterionLabel, decisionsOf, finalAppraisal, finalCoding, finalDecision, finalField, ftPool, settledCodes } from './model.js';
+import { codingPool, criterionCode, reasonLabel, decisionsOf, finalAppraisal, finalCoding, finalDecision, finalField, ftPool, settledCodes } from './model.js';
 import { frameworkElements, frameworkValues, profileOf, reviewSettings } from './methods.js';
 
 export const PAPER_DATA_VERSION = 1;
@@ -71,7 +71,7 @@ export function buildPaperData(review, { version = null, generatedAt = new Date(
 
   const excludedFullText = ftPool(review).map((r) => ({ r, fin: finalDecision(review, 'ft', r.id) })).filter((x) => x.fin.decision === 'exclude')
     .map(({ r, fin }) => ({ id: r.id, title: r.title, authors: r.authors, year: r.year, doi: r.doi,
-      reasonCode: fin.reason ? criterionCode(review, fin.reason) : null, reason: fin.reason ? criterionLabel(review, fin.reason) : null }));
+      reasonCode: fin.reason ? criterionCode(review, fin.reason) : null, reason: fin.reason ? reasonLabel(review, fin.reason) : null }));
 
   const p = review.protocol || {};
   const values = frameworkValues(review);
@@ -84,8 +84,18 @@ export function buildPaperData(review, { version = null, generatedAt = new Date(
         objective: p.objective || '', questions: (p.questions || []).filter((q) => q.trim()), registration: p.registration || '',
         elements: Object.fromEntries(frameworkElements(review).map(([k, label]) => [k, { label, text: values[k] || '' }])),
         evidenceSources: p.evidenceSources || '', deviations: p.notes || '',
+        // Official start and every change acknowledged afterwards (lock.js), for the deviations section.
+        startedAt: review.lock?.startedAt || null,
+        // Optional calibration (pilot) round: how its title/abstract set was drawn.
+        calibration: review.calibration?.seed
+          ? { method: 'random', size: review.calibration.ta?.length ?? null, poolSize: review.calibration.poolSize, stream: review.calibration.stream || null, seed: review.calibration.seed, drawnAt: review.calibration.drawnAt }
+          : null,
+        amendments: (review.lock?.log || []).filter((e) => e.kind === 'amendment' || e.kind === 'restart').map((e) => ({
+          kind: e.kind, at: e.at, by: reviewers.find((rv) => rv.id === e.by)?.name || null, reason: e.reason || '',
+          changes: (e.changes || []).map((c) => c.label), decisionsBefore: e.decisionsBefore ?? e.decisionsArchived ?? null,
+        })),
       },
-      criteria: review.criteria.map((c) => ({ code: criterionCode(review, c.id), kind: c.kind, element: c.element, stages: c.stages, text: c.text })),
+      criteria: review.criteria.map((c) => ({ code: criterionCode(review, c.id), kind: c.kind, element: c.element, stages: c.stages, text: c.text, ...(c.kind === 'paired' ? { excludeText: c.excludeText || '' } : {}) })),
     },
     reviewers: reviewers.map((rv) => ({ id: rv.id, name: rv.name, type: rv.type, model: rv.model || '', assignment: rv.assignment })),
     searches: review.runs.map((r, i) => ({
