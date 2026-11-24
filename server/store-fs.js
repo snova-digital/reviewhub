@@ -183,6 +183,12 @@ export async function createFsStore() {
       return { rev: next.rev, updatedAt: next.updatedAt };
     },
 
+    // Snapshot now, regardless of the 10-minute interval (before a restart of the review, for example).
+    async backup(id) {
+      await readReview(id);
+      await maybeBackup(id, true);
+    },
+
     // Removing a reviewer moves their file to <workspace>/trash (never hard-deleted).
     async trashDecisions(id, rid) {
       const p = decisionsFile(id, rid);

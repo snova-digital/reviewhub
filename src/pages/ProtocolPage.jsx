@@ -1,8 +1,10 @@
+import { useEffect, useRef, useState } from 'react';
 import { useReview } from '../lib/store.jsx';
 import { Link } from 'react-router-dom';
-import { criterionCode, newCriterion, STAGES } from '../lib/model.js';
+import { criterionCode, mergeIntoPair, newCriterion, STAGES } from '../lib/model.js';
 import { criterionElements, FRAMEWORKS, frameworkElements, frameworkValues, guide, reviewSettings } from '../lib/methods.js';
 import { Button, Card, Field, Input, SectionTitle, Select, Textarea } from '../components/ui.jsx';
+import { PlanBanner, ReadOnly, usePlanAccess } from '../components/PlanLock.jsx';
 
 // Static class names so Tailwind picks them up.
 const ELEMENT_GRID = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-2 lg:grid-cols-4', 5: 'grid-cols-2 lg:grid-cols-5' };
@@ -25,17 +27,20 @@ export default function ProtocolPage() {
   const elements = frameworkElements(review);
   const values = frameworkValues(review);
   const setTitle = (title) => update((r) => ({ ...r, title }));
-  const screened = Object.values(review.decisions || {}).some((d) => Object.keys(d.screening?.ta || {}).length > 0);
+  // Frozen parts (objective, questions, framework, criteria) need `editable`; title, screening aids and notes only `manage`.
+  const { manage, editable } = usePlanAccess();
 
   return (
     <div className="mx-auto max-w-5xl space-y-10 px-8 py-8">
+      <PlanBanner what="protocol and criteria" />
       <section>
         <SectionTitle
           title="Protocol"
           hint={guide(review, 'protocol')}
         />
         <Card className="space-y-4 p-5">
-          <Field label="Review title"><Input value={review.title} onChange={(e) => setTitle(e.target.value)} /></Field>
+          <ReadOnly when={!manage}><Field label="Review title"><Input value={review.title} onChange={(e) => setTitle(e.target.value)} /></Field></ReadOnly>
+          <ReadOnly when={!editable}>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Protocol registration / DOI" hint="e.g. OSF registration link">
               <Input value={p.registration} onChange={(e) => setP({ registration: e.target.value })} placeholder="https://osf.io/…" />
@@ -52,12 +57,13 @@ export default function ProtocolPage() {
                 <div key={i} className="flex gap-2">
                   <span className="mt-1.5 w-10 shrink-0 text-sm text-stone-400">{i + 1}.</span>
                   <Textarea rows={2} value={q} onChange={(e) => setP({ questions: p.questions.map((x, j) => (j === i ? e.target.value : x)) })} />
-                  <Button tone="ghost" size="sm" onClick={() => setP({ questions: p.questions.filter((_, j) => j !== i) })}>✕</Button>
+                  {editable && <Button tone="ghost" size="sm" onClick={() => setP({ questions: p.questions.filter((_, j) => j !== i) })}>✕</Button>}
                 </div>
               ))}
-              <Button size="sm" onClick={() => setP({ questions: [...p.questions, ''] })}>+ Add question</Button>
+              {editable && <Button size="sm" onClick={() => setP({ questions: [...p.questions, ''] })}>+ Add question</Button>}
             </div>
           </div>
+          </ReadOnly>
         </Card>
       </section>
 
@@ -67,6 +73,7 @@ export default function ProtocolPage() {
           hint={<>{fw.label}. {fw.hint} <Link to="../settings" className="underline">Change the framework in the settings</Link>.</>}
         />
         {elements.length === 0 && <Card className="p-4 text-sm text-stone-500">No elements defined yet. Add your own elements under <Link to="../settings" className="underline">settings</Link>.</Card>}
+        <ReadOnly when={!editable}>
         <div className={`grid gap-4 ${ELEMENT_GRID[Math.min(elements.length, 5)] || 'grid-cols-3'}`}>
           {elements.map(([k, label]) => (
             <Card key={k} className="p-4">
@@ -79,29 +86,25 @@ export default function ProtocolPage() {
             <Textarea rows={2} value={p.evidenceSources} onChange={(e) => setP({ evidenceSources: e.target.value })} />
           </Field>
         </Card>
+        </ReadOnly>
       </section>
 
       <section>
         <SectionTitle
           title="Eligibility criteria"
-          hint="These become the checklist during screening. Mark at which stage each criterion can be judged; some (e.g. study design) often only at full text."
-          actions={<>
-            <Button size="sm" onClick={() => update((r) => ({ ...r, criteria: [...r.criteria, newCriterion('inclusion')] }))}>+ Inclusion</Button>
-            <Button size="sm" onClick={() => update((r) => ({ ...r, criteria: [...r.criteria, newCriterion('exclusion')] }))}>+ Exclusion</Button>
-          </>}
+          hint="These become the checklist during screening. A paired criterion is one row with an inclusion and an exclusion side, judged meets / unclear / fails (a fail is the exclusion reason). Simple inclusion or exclusion criteria (e.g. language) are ticked. Mark at which stage each criterion can be judged; some (e.g. study design) often only at full text."
+          actions={editable && <AddCriterion onAdd={(kind) => update((r) => ({ ...r, criteria: [...r.criteria, newCriterion(kind)] }))} />}
         />
-        {screened && (
-          <div className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200">
-            Screening has started. {guide(review, 'deviation')} Deleting a criterion keeps past decisions but shows it as “deleted”.
-          </div>
-        )}
-        {['inclusion', 'exclusion'].map((kind) => (
-          <CriteriaList key={kind} kind={kind} />
-        ))}
+        <ReadOnly when={!editable}>
+          {['paired', 'inclusion', 'exclusion'].map((kind) => (
+            <CriteriaList key={kind} kind={kind} editable={editable} />
+          ))}
+        </ReadOnly>
       </section>
 
       <section>
-        <SectionTitle title="Screening aids" hint="Terms highlighted in titles, abstracts and keywords during title/abstract screening. Comma-separated; * wildcard allowed (e.g. tenan*)." />
+        <SectionTitle title="Screening aids" hint="Terms highlighted in titles, abstracts and keywords during title/abstract screening. Comma-separated; * wildcard allowed (e.g. tenan*). Not part of the frozen plan: the lead can adjust them at any time." />
+        <ReadOnly when={!manage}>
         <Card className="grid grid-cols-2 gap-4 p-4">
           <Field label="Highlight green (relevant)">
             <Textarea rows={2} value={p.highlightTerms.include.join(', ')} onChange={(e) => setP({ highlightTerms: { ...p.highlightTerms, include: e.target.value.split(',').map((s) => s.trimStart()) } })} />
@@ -111,14 +114,17 @@ export default function ProtocolPage() {
           </Field>
         </Card>
         <Card className="mt-4 p-4">
-          <Field label="Notes / deviations from protocol"><Textarea rows={4} value={p.notes} onChange={(e) => setP({ notes: e.target.value })} /></Field>
+          <Field label="Notes / deviations from protocol" hint={`Free text, reported as deviations. Amendments acknowledged after the start are logged separately on the overview. ${guide(review, 'deviation')}`}>
+            <Textarea rows={4} value={p.notes} onChange={(e) => setP({ notes: e.target.value })} />
+          </Field>
         </Card>
+        </ReadOnly>
       </section>
     </div>
   );
 }
 
-function CriteriaList({ kind }) {
+function CriteriaList({ kind, editable }) {
   const { review, update } = useReview();
   const list = review.criteria.filter((c) => c.kind === kind);
   const set = (id, patch) => update((r) => ({ ...r, criteria: r.criteria.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
@@ -134,19 +140,40 @@ function CriteriaList({ kind }) {
     [arr[i], arr[j]] = [arr[j], arr[i]];
     return { ...r, criteria: arr };
   });
-  const tone = kind === 'inclusion' ? 'text-emerald-700' : 'text-rose-700';
+  const tone = { inclusion: 'text-emerald-700', exclusion: 'text-rose-700' }[kind] || 'text-stone-700';
+  const exclusions = review.criteria.filter((c) => c.kind === 'exclusion');
+  const setKind = (id, k) => set(id, k === 'paired' ? { kind: k, group: undefined, excludeText: review.criteria.find((c) => c.id === id)?.excludeText || '' } : { kind: k });
+  const merge = (id, excId) => {
+    const exc = review.criteria.find((c) => c.id === excId);
+    if (exc && confirm(`Fold ${criterionCode(review, excId)} into ${criterionCode(review, id)} as its exclusion side? ${criterionCode(review, excId)} disappears as a separate criterion; past decisions that ticked it or gave it as reason count as “fails” for ${criterionCode(review, id)}.`)) {
+      update((r) => mergeIntoPair(r, id, excId));
+    }
+  };
+  if (kind === 'paired' && !list.length) return null;
   return (
     <div className="mb-5">
-      <h3 className={`mb-2 text-sm font-semibold capitalize ${tone}`}>{kind} criteria</h3>
+      <h3 className={`mb-2 text-sm font-semibold ${kind === 'paired' ? '' : 'capitalize'} ${tone}`}>{kind === 'paired' ? 'Paired criteria (inclusion + exclusion side)' : `${kind} criteria`}</h3>
       {list.length === 0 && <div className="text-sm text-stone-400">None yet.</div>}
       <div className="space-y-2">
         {list.map((c) => (
           <Card key={c.id} className="flex items-start gap-3 p-3">
             <span className={`mt-1.5 w-12 text-sm font-semibold ${tone}`}>{criterionCode(review, c.id)}</span>
             <div className="flex-1 space-y-2">
-              <Textarea rows={2} value={c.text} onChange={(e) => set(c.id, { text: e.target.value })} placeholder="Criterion wording…" />
-              <div className="flex items-center gap-4 text-sm">
-                <div className="w-20"><Input value={c.code || ''} placeholder="Code" title="Custom code, e.g. IC1, RQ2, E3" onChange={(e) => set(c.id, { code: e.target.value.trim() })} /></div>
+              {kind === 'paired' ? <div className="grid grid-cols-2 gap-2">
+                <Field label="Inclusion (meets)"><Textarea rows={3} value={c.text} onChange={(e) => set(c.id, { text: e.target.value })} placeholder="e.g. LLMs, generative AI, foundation models…" /></Field>
+                <Field label="Exclusion (fails)"><Textarea rows={3} value={c.excludeText || ''} onChange={(e) => set(c.id, { excludeText: e.target.value })} placeholder="e.g. conventional AI/ML without transferable contribution…" /></Field>
+              </div> : <Textarea rows={2} value={c.text} onChange={(e) => set(c.id, { text: e.target.value })} placeholder="Criterion wording…" />}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+                <div className="w-20"><Input value={c.code || ''} placeholder="Code" title="Custom code, e.g. EC1, IC1, RQ2, E3" onChange={(e) => set(c.id, { code: e.target.value.trim() })} /></div>
+                <div className="w-28"><Select value={c.kind} onChange={(e) => setKind(c.id, e.target.value)} title="Paired: one row with inclusion and exclusion side. Inclusion / exclusion: ticked.">
+                  <option value="paired">paired</option><option value="inclusion">inclusion</option><option value="exclusion">exclusion</option>
+                </Select></div>
+                {editable && kind !== 'exclusion' && exclusions.length > 0 && (
+                  <div className="w-44"><Select value="" onChange={(e) => e.target.value && merge(c.id, e.target.value)} title="Turn an existing exclusion criterion into this criterion's exclusion side">
+                    <option value="">Fold in exclusion…</option>
+                    {exclusions.map((x) => <option key={x.id} value={x.id}>{criterionCode(review, x.id)}: {x.text.slice(0, 50)}</option>)}
+                  </Select></div>
+                )}
                 {kind === 'inclusion' && (
                   <div className="w-36"><Input value={c.group || ''} placeholder="Group (≥1 of)" title="Criteria sharing a group: at least one must be met (e.g. RQ streams)" onChange={(e) => set(c.id, { group: e.target.value.trim() })} /></div>
                 )}
@@ -168,14 +195,52 @@ function CriteriaList({ kind }) {
                 ))}
               </div>
             </div>
-            <div className="flex flex-col gap-1">
+            {editable && <div className="flex flex-col gap-1">
               <Button tone="ghost" size="sm" onClick={() => move(c.id, -1)}>↑</Button>
               <Button tone="ghost" size="sm" onClick={() => move(c.id, 1)}>↓</Button>
               <Button tone="ghost" size="sm" onClick={() => remove(c.id)}>✕</Button>
-            </div>
+            </div>}
           </Card>
         ))}
       </div>
+    </div>
+  );
+}
+
+// "+ Add criterion ▾": one button that opens a menu of criterion types. Paired is listed first.
+const CRITERION_TYPES = [
+  { value: 'paired', label: 'Paired criterion', hint: 'One question with an inclusion and an exclusion side, judged meets / unclear / fails.', tone: 'bg-stone-700' },
+  { value: 'inclusion', label: 'Inclusion only', hint: 'Ticked if met, e.g. one of several RQ streams.', tone: 'bg-emerald-600' },
+  { value: 'exclusion', label: 'Exclusion only', hint: 'Ticked if it applies, e.g. not in English, before 2018.', tone: 'bg-rose-600' },
+];
+
+function AddCriterion({ onAdd }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const esc = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', close); document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <Button tone="primary" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}>+ Add criterion <span className="ml-1 text-xs">▾</span></Button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-20 mt-1 w-80 border border-stone-200 bg-white shadow-lg">
+          {CRITERION_TYPES.map((t) => (
+            <button key={t.value} type="button" role="menuitem" onClick={() => { onAdd(t.value); setOpen(false); }}
+              className="flex w-full items-start gap-3 border-b border-stone-100 px-4 py-3 text-left last:border-0 hover:bg-stone-50">
+              <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 ${t.tone}`} />
+              <span>
+                <span className="block text-sm font-medium">{t.label}</span>
+                <span className="block text-xs text-stone-500">{t.hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useReview } from '../lib/store.jsx';
 import { newRun, STREAM_VARIANTS, uid } from '../lib/model.js';
 import { Button, Card, Field, Input, Select, Textarea } from './ui.jsx';
+import { ReadOnly } from './PlanLock.jsx';
 
 const termsOf = (b) => (b.terms || '').split('\n').map((t) => t.trim()).filter(Boolean);
 const or = (ts, f = (x) => x) => ts.map(f).join(' OR ');
@@ -45,7 +46,7 @@ export function buildQuery(db, blocks, limits = {}) {
   return [...parts, ...sx.limits(limits).filter(Boolean)].join('\nAND ');
 }
 
-export default function SearchBuilder({ streams }) {
+export default function SearchBuilder({ streams, readOnly = false }) {
   const { review, update } = useReview();
   const search = { blocks: [], queries: [], limits: {}, ...(review.search || {}) };
   const [open, setOpen] = useState(false);
@@ -78,6 +79,7 @@ export default function SearchBuilder({ streams }) {
         <span className="text-xs text-stone-500">term blocks → database-specific search strings</span>
       </button>
       {open && (
+        <ReadOnly when={readOnly}>
         <div className="space-y-6 border-t border-stone-100 p-5">
           <div>
             <div className="mb-2 flex items-center justify-between">
@@ -144,6 +146,7 @@ export default function SearchBuilder({ streams }) {
             </div>
           </div>
         </div>
+        </ReadOnly>
       )}
     </Card>
   );

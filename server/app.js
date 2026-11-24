@@ -66,6 +66,12 @@ export function createApp(store, { authRequired = false } = {}) {
     res.json(out);
   }));
 
+  // Forced snapshot of the review and every reviewer file (e.g. before the lead restarts the review).
+  app.post('/api/reviews/:id/backup', wrap(async (req, res) => {
+    await store.backup(safeId(req.params.id));
+    res.status(201).json({ ok: true });
+  }));
+
   // Removing a reviewer moves their decisions to the trash (never hard-deleted).
   app.delete('/api/reviews/:id/decisions/:rid', wrap(async (req, res) => {
     await store.trashDecisions(safeId(req.params.id), safeId(req.params.rid));

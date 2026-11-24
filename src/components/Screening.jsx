@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { assignmentLabel, criteriaFor, DECISIONS, DECISION_LABEL, suggestDecision, criterionCode } from '../lib/model.js';
+import { assignmentLabel, criteriaFor, criterionState, DECISIONS, DECISION_LABEL, failedCriteria, PAIRED_STATES, reasonCriteria, reasonLabel, suggestDecision, criterionCode } from '../lib/model.js';
 import { Button, Kbd, Select, Textarea, Progress } from './ui.jsx';
 
 // Main screening vs. calibration ("demo") round on the first N records. Kept in the URL (?cal=1).
@@ -96,6 +96,7 @@ export function QueueBar({ q, stage, scope, setScope, reviewer, calibrationSize,
 export function useDecisionForm(review, stage, record, mine) {
   const existing = record ? mine[record.id] : null;
   const [checked, setChecked] = useState([]);
+  const [marks, setMarks] = useState({});
   const [decision, setDecision] = useState(null);
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
@@ -103,6 +104,9 @@ export function useDecisionForm(review, stage, record, mine) {
 
   useEffect(() => {
     setChecked(existing?.checked || []);
+    // Paired criteria: explicit marks, or derived from older decisions (ticks, merged exclusion criteria).
+    setMarks(Object.fromEntries(criteriaFor(review, stage).filter((c) => c.kind === 'paired')
+      .map((c) => [c.id, criterionState(existing, c)]).filter(([, v]) => v)));
     setDecision(existing?.decision || null);
     setReason(existing?.reason || '');
     setNote(existing?.note || '');
@@ -110,23 +114,38 @@ export function useDecisionForm(review, stage, record, mine) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [record?.id]);
 
-  const suggested = suggestDecision(review, stage, checked);
+  const suggested = suggestDecision(review, stage, checked, marks);
   const toggle = (id) => { setTouched(true); setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id])); };
+  // Set a paired criterion to meets | unclear | fails, or clear it (null / same state again).
+  const setMark = (id, state) => {
+    setTouched(true);
+    setMarks((m) => {
+      const { [id]: cur, ...rest } = m;
+      return !state || cur === state ? rest : { ...rest, [id]: state };
+    });
+  };
   const effective = decision || (touched ? suggested : null);
-  const checkedExclusions = checked.filter((id) => review.criteria.find((c) => c.id === id)?.kind === 'exclusion');
-  const effectiveReason = reason || (checkedExclusions.length >= 1 ? checkedExclusions[0] : '');
+  const failed = failedCriteria(review, stage, { checked, marks }).map((c) => c.id);
+  const effectiveReason = reason || failed[0] || '';
+  // Ids whose state is carried by `marks`: paired criteria and the exclusion criteria merged into them.
+  const pairedIds = review.criteria.filter((c) => c.kind === 'paired').flatMap((c) => [c.id, ...(c.mergedFrom || [])]);
 
   return {
-    existing, checked, toggle, decision: effective, setDecision, suggested, reason: effectiveReason, setReason, note, setNote, checkedExclusions,
+    existing, checked, toggle, marks, setMark, pairedIds, decision: effective, setDecision, suggested, reason: effectiveReason, setReason, note, setNote, failed,
   };
 }
 
 export function buildDecision(form, extra, reviewer) {
   const prev = form.existing;
   const { history: _h, ...prevNoHist } = prev || {};
+  const marks = form.marks || {};
+  const paired = form.pairedIds || [];
+  // `checked` also lists the paired criteria that are met (for tools that only read `checked`).
+  const checked = [...form.checked.filter((id) => !paired.includes(id)), ...Object.keys(marks).filter((id) => marks[id] === 'meets')];
   return {
     decision: form.decision,
-    checked: form.checked,
+    checked,
+    ...(paired.length ? { marks } : {}),
     reason: form.decision === 'exclude' ? form.reason || null : null,
     note: form.note,
     reviewer: reviewer || '',
@@ -140,8 +159,10 @@ export function buildDecision(form, extra, reviewer) {
 export function CriteriaChecklist({ review, stage, form, evidenceCount }) {
   const crit = criteriaFor(review, stage);
   const inc = crit.filter((c) => c.kind === 'inclusion');
+  const paired = crit.filter((c) => c.kind === 'paired');
   const groupNames = [...new Set(inc.filter((c) => c.group).map((c) => c.group))];
   const sections = [
+    { key: 'pair', kind: 'paired', title: 'Eligibility criteria: judge each (1–9 cycles meets → unclear → fails)', list: paired },
     { key: 'inc', kind: 'inclusion', title: 'Inclusion criteria: tick if met', list: inc.filter((c) => !c.group) },
     ...groupNames.map((g) => ({ key: `g-${g}`, kind: 'inclusion', title: `${g}: at least one must be met`, list: inc.filter((c) => c.group === g) })),
     { key: 'exc', kind: 'exclusion', title: 'Exclusion criteria: tick if applies', list: crit.filter((c) => c.kind === 'exclusion') },
@@ -154,10 +175,11 @@ export function CriteriaChecklist({ review, stage, form, evidenceCount }) {
         if (!list.length) return null;
         return (
           <div key={key}>
-            <div className={`mb-1.5 text-[11px] font-semibold uppercase tracking-wide ${kind === 'inclusion' ? 'text-emerald-700' : 'text-rose-700'}`}>{title}</div>
+            <div className={`mb-1.5 text-[11px] font-semibold uppercase tracking-wide ${{ inclusion: 'text-emerald-700', exclusion: 'text-rose-700' }[kind] || 'text-stone-600'}`}>{title}</div>
             <div className="space-y-1">
               {list.map((c) => {
                 n += 1;
+                if (kind === 'paired') return <PairedRow key={c.id} review={review} c={c} n={n} form={form} evidence={evidenceCount?.[c.id]} />;
                 const on = form.checked.includes(c.id);
                 const on_cls = kind === 'inclusion' ? 'border-emerald-300 bg-emerald-50' : 'border-rose-300 bg-rose-50';
                 return (
@@ -185,9 +207,44 @@ export function CriteriaChecklist({ review, stage, form, evidenceCount }) {
   );
 }
 
+// One paired criterion: inclusion side and exclusion side in one row, judged meets | unclear | fails.
+const MARK_STYLE = {
+  meets: { row: 'border-emerald-300 bg-emerald-50', on: 'bg-emerald-600 text-white ring-emerald-600', off: 'text-emerald-800 ring-emerald-200 hover:bg-emerald-50' },
+  unclear: { row: 'border-amber-300 bg-amber-50', on: 'bg-amber-500 text-white ring-amber-500', off: 'text-amber-800 ring-amber-200 hover:bg-amber-50' },
+  fails: { row: 'border-rose-300 bg-rose-50', on: 'bg-rose-600 text-white ring-rose-600', off: 'text-rose-800 ring-rose-200 hover:bg-rose-50' },
+};
+const CYCLE = { undefined: 'meets', meets: 'unclear', unclear: 'fails', fails: null };
+
+function PairedRow({ review, c, n, form, evidence }) {
+  const state = form.marks?.[c.id];
+  return (
+    <div className={`rounded-md border px-2.5 py-2 text-sm transition ${state ? MARK_STYLE[state].row : 'border-stone-200 bg-white'}`}>
+      {/* Hidden target for the 1–9 keyboard shortcut: cycles the state. */}
+      <button type="button" data-crit-key={n} className="hidden" onClick={() => form.setMark(c.id, CYCLE[state] ?? null)} />
+      <div className="flex items-start gap-2">
+        <span className="font-semibold text-stone-500">{criterionCode(review, c.id)}</span>
+        <div className="flex-1 space-y-0.5 leading-snug">
+          <div><span className="mr-1 text-[10px] font-semibold uppercase text-emerald-700">in</span>{c.text}</div>
+          {c.excludeText && <div className="text-stone-600"><span className="mr-1 text-[10px] font-semibold uppercase text-rose-700">out</span>{c.excludeText}</div>}
+          {evidence > 0 && <span className="rounded bg-yellow-100 px-1 text-[10px] text-yellow-800">{evidence} evidence</span>}
+        </div>
+        {n <= 9 && <Kbd>{n}</Kbd>}
+      </div>
+      <div className="mt-1.5 flex gap-1 pl-8">
+        {PAIRED_STATES.map((s) => (
+          <button key={s.value} type="button" onClick={() => form.setMark(c.id, s.value)}
+            className={`rounded px-2 py-0.5 text-xs font-medium ring-1 ${state === s.value ? MARK_STYLE[s.value].on : MARK_STYLE[s.value].off}`}>
+            {s.short} {s.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function DecisionPanel({ review, stage, form, onSave, saving, requireReason }) {
   const options = DECISIONS[stage];
-  const excl = criteriaFor(review, stage).filter((c) => c.kind === 'exclusion');
+  const excl = reasonCriteria(review, stage);
   const missingReason = requireReason && form.decision === 'exclude' && !form.reason;
   return (
     <div className="space-y-3">
@@ -218,7 +275,7 @@ export function DecisionPanel({ review, stage, form, onSave, saving, requireReas
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-stone-500">Primary exclusion reason {requireReason && <span className="text-rose-600">(required for PRISMA)</span>}</div>
           <Select value={form.reason} onChange={(e) => form.setReason(e.target.value)}>
             <option value="">— select —</option>
-            {excl.map((c) => <option key={c.id} value={c.id}>{criterionCode(review, c.id)}: {c.text}</option>)}
+            {excl.map((c) => <option key={c.id} value={c.id}>{reasonLabel(review, c.id)}</option>)}
           </Select>
         </div>
       )}

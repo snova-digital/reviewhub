@@ -1,5 +1,5 @@
 // PRISMA-ScR / PRISMA 2020 flow numbers derived from the review state.
-import { criterionLabel, finalDecision, runLabel, studyKey, uniqueRecords } from './model.js';
+import { reasonLabel, finalDecision, runLabel, studyKey, uniqueRecords } from './model.js';
 
 // PRISMA 2020 separates databases/registers from other methods (websites, organisations, citation searching).
 export const isOtherSource = (run) => run?.sourceType === 'other' || /citation|grey|website|organi[sz]ation|hand.?search/i.test(run?.database || '');
@@ -46,7 +46,7 @@ export function prismaCounts(review) {
 
   const reasons = {};
   for (const r of ftExcludedRecs) {
-    const key = ft[r.id].reason ? criterionLabel(review, ft[r.id].reason) : 'No reason recorded';
+    const key = ft[r.id].reason ? reasonLabel(review, ft[r.id].reason) : 'No reason recorded';
     reasons[key] = (reasons[key] || 0) + 1;
   }
 

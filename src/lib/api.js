@@ -63,6 +63,7 @@ export const api = {
   deleteReview: (id) => req('DELETE', `/api/reviews/${id}`),
   saveDecisions: (id, rid, d) => req('PUT', `/api/reviews/${id}/decisions/${rid}`, d),
   deleteDecisions: (id, rid) => req('DELETE', `/api/reviews/${id}/decisions/${rid}`),
+  backup: (id) => req('POST', `/api/reviews/${id}/backup`),
   async uploadImport(id, file) {
     if (!(await isCloud())) return req('POST', `/api/reviews/${id}/imports`, form(file));
     const storedAs = `${Date.now()}-${cleanFileName(file.name)}`;

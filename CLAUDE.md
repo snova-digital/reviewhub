@@ -54,6 +54,8 @@ node scripts/rh.mjs decide <review> --reviewer "Claude (agent)" --stage ta --fil
 node scripts/rh.mjs decide <review> --reviewer "Claude (agent)" --stage ta --file decisions.jsonl --model "<model id>" --prompt-version v1
 ```
 
+`decide` and `code` refuse to write while the full review is **not started** (then only `--scope calibration` works, and only once the lead has started a calibration round) or **paused** because the frozen plan changed (`show` → `status`). The calibration set may be limited to one search stream; `pool --scope calibration` returns exactly that set. Do not work around this; tell the user the lead reviewer has to start the review or resolve the changes in the app.
+
 `<review>` is the review id or a unique fragment of its title; `--reviewer` takes an id or the name. `pool` returns only pending records unless `--all`. Work in batches (e.g. 50): run with `--dry-run` first, then for real, check the output, and report progress to the user. One invalid line aborts the whole write (fix it, or use `--allow-partial` deliberately). Use `--scope calibration` to take part in the calibration round. Keep batch files in a temporary folder, not in the project.
 
 One line per record in the decisions file:
@@ -62,7 +64,8 @@ One line per record in the decisions file:
 {"recordId":"rec_...","decision":"include|fulltext|exclude","criteria":[{"code":"IC1","met":"yes|no|unclear","evidence":"short quote","location":"title|abstract|p. 4"}],"reason":"EC2","confidence":0.8,"rationale":"One or two sentences: how the criteria led to the decision.","note":"","inputs":"what you read, e.g. title+abstract"}
 ```
 
-- `reason` is the code of the primary exclusion criterion; required for `exclude` at full text, recommended at title/abstract.
+- `reason` is the code of the primary exclusion criterion (an exclusion or a paired criterion); required for `exclude` at full text, recommended at title/abstract.
+- **Paired criteria** (`kind: "paired"` in `show`) have an inclusion side (`text`) and an exclusion side (`excludeText`). Judge every one: `met: "yes"` = inclusion side fits, `"no"` = exclusion side fits (fails; give its code as `reason`), `"unclear"` = neither clearly. Any paired criterion failing → exclude; all met (plus groups) → include; otherwise `fulltext`.
 - At full text (`--stage ft`) the decisions are `include | exclude | not_retrieved`.
 - Criteria with `met: "yes"` are recorded as ticked.
 - `confidence` is 0–1. Below about 0.6, prefer `fulltext` at title/abstract.
@@ -100,6 +103,7 @@ npm run build    # production build into dist/
 - `server/store-fs.js`: workspace files; `server/store-cloud.js` + `server/cloud-db.js`: hosted storage (Neon Postgres for JSON, private Vercel Blob for PDFs/imports); `server/auth.js`: shared password (`REVIEWHUB_PASSWORD`). Both stores implement the same interface; keep them in step.
 - `server/workspace.js`: workspace resolution (env → config → legacy `./data` → `./workspace`).
 - `scripts/cloud-sync.mjs`: `rh cloud-list | pull | push` between the hosted version and the local workspace. See `docs/HOSTING.md`.
+- `src/lib/lock.js`: lead reviewer, official start, frozen plan (baseline), change detection and amend / undo / restart; UI in `src/components/PlanLock.jsx`. Anything added to the plan that should be frozen goes into `captureBaseline` and `view`.
 - `src/lib/model.js`: data model, final-decision logic, pools; `src/lib/methods.js`: method profiles (review types, frameworks, charting templates, appraisal tools); `src/lib/prisma.js`: PRISMA counts; `src/lib/progress.js`: step completion, shared by sidebar and overview; `src/lib/analysis.js`: evidence maps and networks; `src/lib/store.jsx`: client state and saving.
 - `src/pages/*`: one page per sidebar step; `src/components/*`: shared UI.
 

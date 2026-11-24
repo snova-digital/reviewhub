@@ -66,6 +66,11 @@ export function createCloudStore() {
       return { rev: next.rev, updatedAt: next.updatedAt };
     },
 
+    async backup(id) {
+      await mustExist(id);
+      await db.maybeBackup(id, true);
+    },
+
     async trashDecisions(id, rid) {
       await db.maybeBackup(safeId(id), true);
       await db.trashDecisions(id, safeId(rid));

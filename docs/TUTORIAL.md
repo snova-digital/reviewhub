@@ -125,7 +125,7 @@ The left sidebar lists every step in order. A ✓ means the step is complete, a 
 ### 4.0 Create the review and choose who you are
 
 1. On the start page, enter a **title** and pick the **type** (scoping, systematic, rapid, other), then *create review*.
-2. ReviewHub asks **Who is reviewing?** Create yourself as a reviewer (human). Leave the workload on *Full review* for now.
+2. ReviewHub asks **Who is reviewing?** Create yourself as a reviewer (human). Leave the workload on *Full review* for now. The first human reviewer of a review becomes its **lead reviewer** (see [section 5](#5-working-with-several-reviewers)).
 
 Your choice is remembered in this browser. To review as someone else, go back to the start page (logo or review switcher in the top bar) and change *reviewing as* on the review's card. Click **+ new reviewer** on the card to add another person.
 
@@ -136,7 +136,6 @@ Open **settings** in the sidebar and check:
 - **Review type**: decides the methodology guidance and the reporting guideline (PRISMA-ScR for scoping reviews, PRISMA 2020 otherwise).
 - **Eligibility framework**: PCC (JBI default), PICO, PICOS, PEO, SPIDER, SPICE, or custom elements.
 - **Critical appraisal**: on for systematic reviews; usually off for scoping reviews.
-- **Calibration size**: how many records the pilot round uses (default 20).
 - **Deduplication**: *strict* (same DOI or identical title ±1 year) or *fuzzy* (also ≥ 90 % similar titles with matching year and first author).
 
 ### 4.2 Protocol & criteria
@@ -146,7 +145,14 @@ Fill in the objective, review questions, the framework elements, and the registr
 - an element (e.g. *Population*, *Language*, *Date range*), and
 - the stages it applies to (title/abstract, full text, or both).
 
-Criteria get short codes (I1, E1, …) that appear as checkboxes while screening, and that the exclusion reasons and κ per criterion refer to. Pilot them with your co-reviewer before screening everything (see 4.5).
+There are three kinds of criteria:
+
+- **Paired** (*+ Add criterion → Paired criterion*): one criterion with an inclusion side and an exclusion side, like a row of an eligibility table (e.g. *Technology: LLMs or generative AI* / *conventional AI without transferable contribution*). While screening you judge it **meets / unclear / fails**; a *fail* becomes the exclusion reason. Use this when inclusion and exclusion are two ends of the same question.
+- **Inclusion** and **exclusion**: ticked on their own. Good for simple rules such as *not in English* or *published before 2018*. Inclusion criteria that share a *group* (e.g. RQ1–RQ3) need at least one of the group.
+
+You can switch a criterion's type later. *Fold in exclusion…* turns an existing exclusion criterion into the exclusion side of a paired one; past decisions that ticked it count as *fails*.
+
+Criteria get short codes (EC1, IC1, E1, …) that appear in the checklist while screening, and that the exclusion reasons and κ per criterion refer to. Pilot them with your co-reviewer before screening everything (see 4.5).
 
 ### 4.3 Searches & import
 
@@ -166,6 +172,23 @@ ReviewHub deduplicates automatically. Duplicates are **flagged, not deleted**: y
 
 Attach PDFs here or later. *Attach PDFs in bulk* matches files by Zotero file path, DOI, or title in the file name. Tip: in Zotero, export the collection with files, or use the *ZotFile*-style naming `Author_Year_Title.pdf`.
 
+### Start the review: freezing the plan
+
+When protocol, criteria and searches are ready, open step 4, **title / abstract screening**. Until the review is started it asks how you want to begin, and only the lead reviewer can choose:
+
+- **Calibration round (optional)**: set how many records it uses (JBI suggests about 25–50) and, with search streams switched on, which stream they come from. ReviewHub draws a **random sample** of that size once, when the round starts. Every reviewer then screens that same set (see 4.5). The draw is reproducible (its seed is stored), later imports never change it, and the step 4 card shows a line for your methods section, e.g. *random sample of 25 of 1,340 records*. Steps 1 and 2 stay editable, so you can still sharpen the criteria. The card shows who has finished and links to the comparison.
+- **Full review**: a checklist shows what is ready, and a warning explains that starting **freezes the current state of step 1 (protocol & criteria) and step 2 (searches & import)**, together with the method settings (review type, framework, appraisal, deduplication). The lead confirms this explicitly, and main screening opens for everyone.
+
+You can run a calibration round first and start the full review afterwards, or skip calibration.
+
+After the start the lead can still click **Amend…** on a plan page. Any change to the frozen plan **pauses screening, coding and appraisal for everyone** (the sidebar turns red) until the lead resolves it in one of three ways:
+
+- **Acknowledge as amendment**: give a reason; the change is logged with the date, who made it and how many decisions existed already, and becomes the new frozen plan. The log appears on the overview and in the paper data (`protocol.amendments`), ready for the deviations section of your paper.
+- **Undo changes**: go back to the plan as it was frozen (not available for new or removed imports: remove the import instead).
+- **Restart from scratch**: every reviewer's screening, coding and appraisal and all consensus decisions move to an archive inside the review (nothing is deleted, a backup is taken first), and screening starts again under the new plan. Calibration rounds are kept.
+
+The review title, screening highlight terms, protocol notes and run notes are not frozen.
+
 ### 4.5 Title / abstract screening
 
 For each record decide:
@@ -176,9 +199,9 @@ For each record decide:
 | `F` | Review with full text | Unsure: send it on and decide on the full text |
 | `E` | Exclude | Clearly fails a criterion (tick which one) |
 
-`1`–`9` tick criteria, `Enter` saves and moves on, `←`/`→` browse. Use *Review with full text* generously: that is what the JBI guidance recommends for ambiguous titles and abstracts.
+`1`–`9` tick criteria (for paired criteria: cycle meets → unclear → fails), `Enter` saves and moves on, `←`/`→` browse. Use *Review with full text* generously: that is what the JBI guidance recommends for ambiguous titles and abstracts.
 
-**Calibration first.** Switch on *Calibration* to screen a pilot set (the first N records) with your co-reviewer. Compare under *Compare & consensus*, discuss disagreements, sharpen the criteria, and aim for ≥ 75 % agreement before the main round. Calibration decisions are stored separately and never count in PRISMA.
+**Calibration first (optional, recommended).** Once the lead has started a calibration round (see [Start the review](#start-the-review-freezing-the-plan)), every reviewer screens the same pilot set: a random sample of N records, optionally of one search stream. Compare under *Compare & consensus → Calibration*, discuss disagreements, sharpen the criteria, and aim for ≥ 75 % agreement before the full review. Calibration decisions are stored separately and never count in PRISMA. Because the plan is not frozen yet, changing the criteria now needs no amendment.
 
 ### 4.6 Full-text screening
 
@@ -227,6 +250,8 @@ Download what the paper needs: PRISMA counts, decision CSVs (with every reviewer
 ---
 
 ## 5. Working with several reviewers
+
+**The lead reviewer.** Everyone sees every page, but only the lead reviewer changes the shared plan: protocol and criteria, searches and imports, duplicate flags, settings and the list of reviewers. The lead also starts the review (see [Start the review](#start-the-review-freezing-the-plan)). For everyone else these pages are read-only; attaching PDFs stays open to all. Make someone lead under *Reviewers → Edit → Lead reviewer*; a review can have more than one lead and always keeps at least one. Reviews created before this feature have no lead, so every human reviewer can edit until someone is made lead. This is a safeguard against accidental edits, not access control: who you review as is chosen in the browser.
 
 **Set up workloads** on the *Reviewers* page. Per stage, each reviewer does either:
 

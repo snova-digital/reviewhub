@@ -62,8 +62,9 @@ export function reviewStages(review) {
     !p.objective && 'objective',
     ...elements.filter(([k]) => !(values[k] || '').trim()).map(([, label]) => label.toLowerCase()),
     !elements.length && 'framework elements (settings)',
-    !review.criteria.some((x) => x.kind === 'inclusion') && 'inclusion criteria',
-    !review.criteria.some((x) => x.kind === 'exclusion') && 'exclusion criteria',
+    // Paired criteria carry both an inclusion and an exclusion side.
+    !review.criteria.some((x) => x.kind === 'inclusion' || x.kind === 'paired') && 'inclusion criteria',
+    !review.criteria.some((x) => x.kind === 'exclusion' || x.kind === 'paired') && 'exclusion criteria',
   ].filter(Boolean);
   const protoTotal = 3 + Math.max(elements.length, 1);
   const fwShort = (reviewSettings(review).framework || '').toUpperCase();

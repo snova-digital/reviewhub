@@ -6,6 +6,7 @@ import { recomputeDuplicates } from '../lib/dedup.js';
 import { DEDUP_MODES, FRAMEWORKS, PROFILES, REVIEW_TYPES, reviewSettings } from '../lib/methods.js';
 import { Button, Card, Field, Input, SectionTitle, Select } from '../components/ui.jsx';
 import WorkspaceEditor from '../components/WorkspaceEditor.jsx';
+import { PlanBanner, ReadOnly, usePlanAccess } from '../components/PlanLock.jsx';
 
 const keyOf = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'element';
 
@@ -23,6 +24,8 @@ export default function SettingsPage() {
   const s = reviewSettings(review);
   const setS = (patch) => update((r) => ({ ...r, settings: { ...reviewSettings(r), ...(r.settings || {}), ...patch } }));
   const [dedupMsg, setDedupMsg] = useState(null);
+  // Review type, framework, appraisal and deduplication are part of the frozen plan; the rest needs the lead only.
+  const { manage, editable } = usePlanAccess();
 
   // Dry run of re-deduplication with the chosen mode, so the effect is visible before applying it.
   const dedupPreview = useMemo(() => {
@@ -44,6 +47,8 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-10 px-8 py-8">
+      <PlanBanner what="method settings" />
+      <ReadOnly when={!editable}>
       <section>
         <SectionTitle title="Method" hint="The review type sets the methodology the app follows: guidance texts, the default eligibility framework, the reporting guideline and which steps are on by default. Changing it never deletes data." />
         <Card className="space-y-5 p-5">
@@ -64,10 +69,10 @@ export default function SettingsPage() {
                 {custom.map((el, i) => (
                   <div key={el.key} className="flex gap-2">
                     <Input value={el.label} placeholder="e.g. Technology" onChange={(e) => setCustom(custom.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
-                    <Button tone="ghost" size="sm" onClick={() => setCustom(custom.filter((_, j) => j !== i))}>✕</Button>
+                    {editable && <Button tone="ghost" size="sm" onClick={() => setCustom(custom.filter((_, j) => j !== i))}>✕</Button>}
                   </div>
                 ))}
-                <Button size="sm" onClick={() => setCustom([...custom, { key: `${keyOf('element')}_${Date.now().toString(36)}`, label: '' }])}>+ Element</Button>
+                {editable && <Button size="sm" onClick={() => setCustom([...custom, { key: `${keyOf('element')}_${Date.now().toString(36)}`, label: '' }])}>+ Element</Button>}
               </div>
             </div>
           )}
@@ -75,23 +80,26 @@ export default function SettingsPage() {
         </Card>
       </section>
 
+      </ReadOnly>
+
       <section>
         <SectionTitle title="Steps and features" />
         <Card className="space-y-4 p-5">
+          <ReadOnly when={!editable}>
           <Toggle checked={s.appraisal} onChange={(v) => setS({ appraisal: v })} label="Critical appraisal / risk of bias"
             hint="Adds an appraisal step for the included sources (RoB 2, ROBINS-I, CASP or your own checklist), with independent appraisers and consensus. Usually on for systematic reviews, optional for scoping reviews." />
+          </ReadOnly>
+          <ReadOnly when={!manage}>
           <Toggle checked={s.streams} onChange={(v) => setS({ streams: v })} label="Search streams"
             hint="Group search runs into streams (e.g. one per review question, with primary and supplementary queries) and build database-specific queries from shared term blocks." />
-          <div className="flex items-center gap-3 text-sm">
-            <span>Calibration set size</span>
-            <Input className="w-24" type="number" min={5} max={200} value={s.calibrationSize} onChange={(e) => setS({ calibrationSize: Number(e.target.value) || 20 })} />
-            <span className="text-xs text-stone-400">first records of each stage, screened as a practice round</span>
-          </div>
+          <p className="text-xs text-stone-500">The optional calibration round (size and search stream) is set up in step 4, title / abstract screening.</p>
+          </ReadOnly>
         </Card>
       </section>
 
       <section>
         <SectionTitle title="Deduplication" hint="Used for every new import. Re-running applies the mode to all records already imported." />
+        <ReadOnly when={!editable}>
         <Card className="space-y-3 p-5">
           {DEDUP_MODES.map((m) => (
             <label key={m.value} className="flex items-start gap-3 text-sm">
@@ -107,6 +115,7 @@ export default function SettingsPage() {
           </div>
           {dedupMsg && <div className="bg-indigo-50 px-3 py-2 text-sm text-indigo-900">{dedupMsg}</div>}
         </Card>
+        </ReadOnly>
       </section>
 
       <section>

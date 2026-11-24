@@ -1,12 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
 import Papa from 'papaparse';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useReview } from '../lib/store.jsx';
 import {
   ASSIGNMENT_MODES, assignmentLabel, criteriaFor, criteriaHash, criterionCode, decisionsOf, emptyDecisions, isAssigned, newReviewer, stagePool, workStagesFor,
 } from '../lib/model.js';
-import { guide } from '../lib/methods.js';
+import { guide, reviewSettings } from '../lib/methods.js';
 import { Badge, Button, Card, Field, Input, SectionTitle, Select } from '../components/ui.jsx';
+import { canManage, leadsOf, workBlock } from '../lib/lock.js';
 
 function download(name, content, type = 'text/plain') {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -26,11 +27,11 @@ const countDone = (d) => ({
 function TypeBadge({ rv }) {
   return rv.type === 'llm'
     ? <Badge tone="info">LLM{rv.model ? ` · ${rv.model}` : ''}</Badge>
-    : <Badge tone="include">human</Badge>;
+    : <><Badge tone="include">human</Badge>{rv.lead && <Badge tone="unclear">lead</Badge>}</>;
 }
 
 // ---- reviewer form (create + edit) -------------------------------------------
-function ReviewerForm({ initial, onSubmit, submitLabel, onCancel }) {
+function ReviewerForm({ initial, onSubmit, submitLabel, onCancel, canSetLead = false }) {
   const [rv, setRv] = useState(initial);
   const { review } = useReview();
   const setA = (stage, patch) => setRv((x) => ({ ...x, assignment: { ...x.assignment, [stage]: { ...x.assignment[stage], ...patch } } }));
@@ -47,6 +48,12 @@ function ReviewerForm({ initial, onSubmit, submitLabel, onCancel }) {
           </div>
         </Field>
       </div>
+      {rv.type === 'human' && canSetLead && (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={!!rv.lead} onChange={(e) => setRv({ ...rv, lead: e.target.checked })} />
+          <span><b>Lead reviewer</b><span className="block text-xs text-stone-500">Can change protocol, criteria, searches, records, settings and reviewers, and starts the review. Everyone else sees these read-only.</span></span>
+        </label>
+      )}
       {rv.type === 'llm' && (
         <Field label="Model / setup" hint="Record model, version and prompt variant for reproducibility. LLM decisions are compared with human ones but never become final.">
           <Input value={rv.model} onChange={(e) => setRv({ ...rv, model: e.target.value })} placeholder="e.g. claude-opus-5-5, prompt v2, temperature 0" />
@@ -92,7 +99,13 @@ export function ReviewerGate() {
   // "Start as new reviewer" on the start page opens the form straight away.
   const [creating, setCreating] = useState(!review.reviewers?.length || params.get('reviewer') === 'new');
   const done = (rid) => { setMe(rid); if (params.has('reviewer')) setParams({}, { replace: true }); };
-  const create = (rv) => { update((r) => ({ ...r, reviewers: [...(r.reviewers || []), rv] }), { immediate: true }); done(rv.id); };
+  // The first human reviewer of a review becomes its lead (can be changed under Reviewers).
+  const create = (rv) => {
+    const first = rv.type === 'human' && !leadsOf(review).length && !(review.reviewers || []).some((x) => x.type !== 'llm');
+    const next = first ? { ...rv, lead: true } : rv;
+    update((r) => ({ ...r, reviewers: [...(r.reviewers || []), next] }), { immediate: true });
+    done(next.id);
+  };
   return (
     <div className="mx-auto max-w-3xl px-8 py-14">
       <h1 className="brand-bar text-3xl font-bold tracking-tight">Who is reviewing?</h1>
@@ -139,9 +152,19 @@ export default function ReviewersPage() {
   const [msg, setMsg] = useState(null);
   const fileRef = useRef();
 
-  const save = (rv) => { update((r) => ({ ...r, reviewers: r.reviewers.map((x) => (x.id === rv.id ? rv : x)) })); setEditing(null); };
+  const manage = canManage(review, me);
+  const hadLead = leadsOf(review).length > 0;
+  // Once a review has a lead it keeps at least one, otherwise everybody could edit again.
+  const keepsLead = (list) => !hadLead || list.some((x) => x.lead && x.type !== 'llm');
+  const save = (rv) => {
+    const next = review.reviewers.map((x) => (x.id === rv.id ? (rv.type === 'llm' ? { ...rv, lead: false } : rv) : x));
+    if (!keepsLead(next)) return alert('A review needs at least one lead reviewer. Make someone else lead first.');
+    update((r) => ({ ...r, reviewers: r.reviewers.map((x) => (x.id === rv.id ? next.find((y) => y.id === rv.id) : x)) }));
+    setEditing(null);
+  };
   const add = (rv) => { update((r) => ({ ...r, reviewers: [...r.reviewers, rv] })); setAdding(false); };
   const remove = (rv) => {
+    if (!keepsLead(review.reviewers.filter((x) => x.id !== rv.id))) return alert(`${rv.name} is the only lead reviewer. Make someone else lead first.`);
     const n = countDone(decisionsOf(review, rv.id));
     if (!confirm(`Remove reviewer "${rv.name}"? Their file (${n.ta} T/A, ${n.ft} full-text decisions, ${n.coding} coded) is moved to the workspace trash.`)) return;
     update((r) => {
@@ -176,19 +199,21 @@ export default function ReviewersPage() {
       <section>
         <SectionTitle
           title="Reviewers"
-          hint={`${guide(review, 'reviewers')} Each reviewer has their own decision file (reviews/<id>/decisions/ in the workspace), so two people never overwrite each other. A reviewer can screen everything or cross-check a random sample. Agent reviewers (e.g. Claude Code running in this folder) work the same way; see CLAUDE.md.`}
-          actions={<>
+          hint={`${guide(review, 'reviewers')} Each reviewer has their own decision file (reviews/<id>/decisions/ in the workspace), so two people never overwrite each other. A reviewer can screen everything or cross-check a random sample. The lead reviewer manages protocol, criteria, searches, records, settings and this list; everyone else sees them read-only. Agent reviewers (e.g. Claude Code running in this folder) work the same way; see CLAUDE.md.`}
+          actions={manage && <>
             <input ref={fileRef} type="file" accept="application/json" className="hidden" onChange={importReviewer} />
             <Button onClick={() => fileRef.current.click()}>Import reviewer file…</Button>
             <Button tone="primary" onClick={() => setAdding(true)}>+ Reviewer</Button>
           </>}
         />
         {msg && <div className="mb-3 rounded-md bg-indigo-50 px-3 py-2 text-sm text-indigo-900">{msg}</div>}
-        {adding && <Card className="mb-4 p-5"><ReviewerForm initial={newReviewer({ name: '' })} submitLabel="Add reviewer" onSubmit={add} onCancel={() => setAdding(false)} /></Card>}
+        {!manage && <div className="mb-4 border-l-4 border-stone-400 bg-stone-100 px-4 py-3 text-sm text-stone-700"><b>Read-only.</b> Only the lead reviewer ({leadsOf(review).map((x) => x.name).join(', ')}) can add, change or remove reviewers.</div>}
+        {manage && !hadLead && <div className="mb-4 border-l-4 border-brand-yellow bg-amber-50 px-4 py-3 text-sm">No lead reviewer is set, so every human reviewer can change the plan. Edit a reviewer and tick <b>Lead reviewer</b>.</div>}
+        {adding && <Card className="mb-4 p-5"><ReviewerForm initial={newReviewer({ name: '' })} submitLabel="Add reviewer" onSubmit={add} onCancel={() => setAdding(false)} canSetLead={manage} /></Card>}
         <div className="space-y-3">
           {review.reviewers.map((rv) => {
             const n = countDone(decisionsOf(review, rv.id));
-            if (editing === rv.id) return <Card key={rv.id} className="p-5"><ReviewerForm initial={rv} submitLabel="Save" onSubmit={save} onCancel={() => setEditing(null)} /></Card>;
+            if (editing === rv.id) return <Card key={rv.id} className="p-5"><ReviewerForm initial={rv} submitLabel="Save" onSubmit={save} onCancel={() => setEditing(null)} canSetLead={manage} /></Card>;
             return (
               <Card key={rv.id} className="flex items-center gap-4 p-4">
                 <div className="flex-1">
@@ -196,9 +221,9 @@ export default function ReviewersPage() {
                   <div className="mt-1 text-xs text-stone-500">{workStagesFor(review).map((s) => `${s.label}: ${assignmentLabel(rv, s.key)}`).join(' · ')}</div>
                   <div className="text-xs text-stone-400">{n.ta} T/A · {n.ft} full text · {n.coding} coded</div>
                 </div>
-                <Button size="sm" onClick={() => setEditing(rv.id)}>Edit</Button>
+                {manage && <Button size="sm" onClick={() => setEditing(rv.id)}>Edit</Button>}
                 <Button size="sm" onClick={() => exportReviewer(rv)} title="Download this reviewer's file, e.g. to send it to a co-reviewer working on another computer">Export</Button>
-                <Button size="sm" tone="danger" onClick={() => remove(rv)}>Remove</Button>
+                {manage && <Button size="sm" tone="danger" onClick={() => remove(rv)}>Remove</Button>}
               </Card>
             );
           })}
@@ -208,15 +233,12 @@ export default function ReviewersPage() {
         </p>
       </section>
 
-      <LlmTools />
+      {manage && <LlmTools />}
 
       <section>
-        <SectionTitle title="Calibration round" hint={`A practice round on the first records of a stage. Both reviewers screen them separately from the main screening, then compare agreement per criterion to sharpen the wording (${guide(review, 'pilotTarget')}).`} />
-        <Card className="flex items-center gap-4 p-4 text-sm">
-          <span>Number of records in the calibration set</span>
-          <Input className="w-24" type="number" min={5} max={200} value={review.settings.calibrationSize || 20}
-            onChange={(e) => update((r) => ({ ...r, settings: { ...r.settings, calibrationSize: Number(e.target.value) || 20 } }))} />
-          <span className="text-xs text-stone-400">The set is the first records in the screening order. Start it from the screening page with the “Calibration” toggle.</span>
+        <SectionTitle title="Calibration round" hint={`Optional practice round before the full review: every reviewer screens the same small set separately from the main screening, then you compare agreement per criterion to sharpen the wording (${guide(review, 'pilotTarget')}).`} />
+        <Card className="p-4 text-sm">
+          The lead reviewer sets up and starts the calibration round (number of records{reviewSettings(review).streams ? ', search stream' : ''}) in step 4, <Link to="../screen/ta" className="underline">title / abstract screening</Link>.
         </Card>
       </section>
     </div>
@@ -254,10 +276,12 @@ function LlmTools() {
     download(`${slug(review.title)}-llm-${stage}-criteria.md`, [
       `# ${review.title}: eligibility criteria (${stage === 'ta' ? 'title/abstract' : 'full text'})`, '',
       '## Review questions', ...review.protocol.questions.map((q) => `- ${q}`), '',
+      ...(crit.some((c) => c.kind === 'paired') ? ['## Eligibility criteria (judge each: meets / unclear / fails)',
+        ...crit.filter((c) => c.kind === 'paired').map((c) => `- **${criterionCode(review, c.id)}** Include: ${c.text}${c.excludeText ? ` | Exclude: ${c.excludeText}` : ''}`), ''] : []),
       '## Inclusion criteria', ...crit.filter((c) => c.kind === 'inclusion').map((c) => `- **${criterionCode(review, c.id)}** ${c.text}`), '',
       '## Exclusion criteria', ...crit.filter((c) => c.kind === 'exclusion').map((c) => `- **${criterionCode(review, c.id)}** ${c.text}`), '',
       '## Expected output (CSV)',
-      'record_id, decision (include | exclude | fulltext), criteria (space-separated codes that apply), reason (code of the primary exclusion criterion), confidence (0–1), rationale (one or two sentences: how you arrived at the decision), note',
+      'record_id, decision (include | exclude | fulltext), criteria (space-separated codes that apply; for eligibility criteria CODE=meets|unclear|fails), reason (code of the primary exclusion criterion), confidence (0–1), rationale (one or two sentences: how you arrived at the decision), note',
       '', `Criteria fingerprint: ${criteriaHash(review, stage)} (decisions are flagged if the criteria change afterwards).`,
     ].join('\n'), 'text/markdown');
   };
@@ -265,6 +289,12 @@ function LlmTools() {
   async function importCsv(e) {
     const f = e.target.files[0]; e.target.value = '';
     if (!f) return;
+    const block = workBlock(review, scope);
+    if (block) return setMsg({
+      paused: 'Screening is paused until the lead resolves the changes to the plan.',
+      'not-started': 'The full review has not been started yet: only calibration decisions can be imported.',
+      'calibration-not-started': 'No calibration round has been started yet (step 4).',
+    }[block]);
     const { data } = Papa.parse(await f.text(), { header: true, skipEmptyLines: true, transformHeader: (h) => h.trim().toLowerCase() });
     const byId = new Map(review.records.map((r) => [r.id, r]));
     const byDoi = new Map(review.records.filter((r) => r.doi).map((r) => [r.doi.toLowerCase(), r]));
@@ -273,10 +303,21 @@ function LlmTools() {
       const rec = byId.get(row.record_id) || byDoi.get((row.doi || '').toLowerCase());
       const decision = DECISION_ALIASES[(row.decision || '').trim().toLowerCase()];
       if (!rec || !decision) { skipped.push(row.record_id || row.doi || '?'); continue; }
-      const codes = (row.criteria || '').split(/[\s,;]+/).map((x) => codeToId[x.toLowerCase()]).filter(Boolean);
+      // Plain codes are ticked; CODE=meets|unclear|fails sets a paired criterion (a bare paired code = meets).
+      const marks = {}; const codes = [];
+      for (const tok of (row.criteria || '').split(/[\s,;]+/).filter(Boolean)) {
+        const [code, st] = tok.split('=');
+        const c = review.criteria.find((x) => x.id === codeToId[code.toLowerCase()]);
+        if (!c) continue;
+        if (c.kind === 'paired') {
+          const state = ['meets', 'unclear', 'fails'].includes((st || 'meets').toLowerCase()) ? (st || 'meets').toLowerCase() : null;
+          if (state) marks[c.id] = state;
+          if (state === 'meets') codes.push(c.id);
+        } else codes.push(c.id);
+      }
       const confidence = row.confidence === undefined || row.confidence === '' ? null : Number(row.confidence);
       decided[rec.id] = {
-        decision, checked: codes, reason: decision === 'exclude' ? codeToId[(row.reason || '').trim().toLowerCase()] || null : null,
+        decision, checked: codes, ...(Object.keys(marks).length ? { marks } : {}), reason: decision === 'exclude' ? codeToId[(row.reason || '').trim().toLowerCase()] || null : null,
         note: row.note || '', reviewer: target.name, decidedAt: new Date().toISOString(), history: [], importedFrom: f.name,
         agent: { source: 'csv', criteriaHash: criteriaHash(review, stage), confidence: Number.isFinite(confidence) ? confidence : null, rationale: row.rationale || '', criteria: [] },
       };

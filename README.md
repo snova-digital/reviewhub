@@ -56,12 +56,13 @@ Then ask, for example: *"Set up ReviewHub for me and start it"*, or *"Screen the
 
 | Step | What you do |
 |---|---|
-| Settings | Review type, eligibility framework, appraisal on/off, calibration size, deduplication mode |
-| Reviewers | Add human and LLM/agent reviewers and their workload per stage (full or random sample) |
+| Settings | Review type, eligibility framework, appraisal on/off, deduplication mode |
+| Reviewers | Add human and LLM/agent reviewers and their workload per stage (full or random sample); a lead reviewer manages the plan |
+| Start (in step 4) | The lead starts the full review: protocol, criteria and searches are frozen; later changes pause screening until acknowledged as an amendment, undone, or the review is restarted |
 | 1 · Protocol & criteria | Objective, questions, framework elements, registration, inclusion / exclusion criteria |
 | 2 · Searches & import | One documented search run per database, plus the raw export (RIS, BibTeX, CSV, PubMed, WoS) |
 | 3 · Records & duplicates | Automatic deduplication (strict or fuzzy) with manual override, bulk PDF attachment |
-| 4 · Title / abstract screening | Include / full text / exclude, keyboard driven, optional calibration round |
+| 4 · Title / abstract screening | First the lead chooses: an optional calibration round (random sample; size, search stream) or the full review, which freezes steps 1 and 2. Then include / full text / exclude, keyboard driven |
 | 5 · Full-text screening | Embedded PDF viewer, evidence excerpts, exclusion reason required |
 | 6 · Extraction & coding | Charting form, codebook with definitions and change log, code excerpts |
 | 7 · Critical appraisal | RoB 2, ROBINS-I, CASP or a custom checklist (optional) |

@@ -25,6 +25,8 @@ export function ReviewProvider({ id, children }) {
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('saved'); // saved | pending | saving | error | conflict
   const [me, setMeState] = useState(() => readMe(id));
+  // Lead only: the frozen plan is unlocked for editing in this tab (see lock.js). Not stored.
+  const [amending, setAmending] = useState(false);
   const latest = useRef(null);
   const saved = useRef(null); // last state known to be on disk
   const timer = useRef(null);
@@ -117,7 +119,7 @@ export function ReviewProvider({ id, children }) {
 
   const reviewer = review ? reviewerById(review, me) : null;
   return (
-    <Ctx.Provider value={{ review, update, updateMine, status, error, reload, flush: persist, me: reviewer ? me : null, reviewer, setMe }}>
+    <Ctx.Provider value={{ review, update, updateMine, status, error, reload, flush: persist, me: reviewer ? me : null, reviewer, setMe, amending, setAmending }}>
       {children}
     </Ctx.Provider>
   );

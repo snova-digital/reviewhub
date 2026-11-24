@@ -6,6 +6,7 @@ import PrismaDiagram from '../components/PrismaDiagram.jsx';
 import { appraisalPool, assignmentLabel, codingPool, decisionsOf, ftPool, isAssigned, uniqueRecords, workStagesFor } from '../lib/model.js';
 import { guide, profileOf } from '../lib/methods.js';
 import { Band, Card, Progress, SectionTitle } from '../components/ui.jsx';
+import { StartCard } from '../components/PlanLock.jsx';
 
 const STAGE_ROUTE = { ta: 'screen/ta', ft: 'screen/ft', coding: 'code', appraisal: 'appraise' };
 
@@ -49,6 +50,7 @@ export default function OverviewPage() {
         {/* 1. Where the review is right now and what to do next */}
         <section>
           <SectionTitle title="Where the review stands" hint={`${doneCount} of ${steps.length} steps complete.`} />
+          <div className="mb-4"><StartCard /></div>
           <Card className="overflow-hidden">
             <div className="border-l-4 border-brand-teal p-6">
               <div className="text-xs font-medium uppercase tracking-[0.15em] text-stone-500">current step</div>

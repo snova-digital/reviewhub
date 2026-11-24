@@ -136,8 +136,43 @@ export const assignmentLabel = (reviewer, stage) => {
 
 export function newCriterion(kind) {
   // No default element: a pre-filled 'concept' was silently kept for criteria like "Not peer-reviewed".
-  return { id: uid('c'), kind, element: '', text: '', stages: ['ta', 'ft'] };
+  return { id: uid('c'), kind, element: '', text: '', ...(kind === 'paired' ? { excludeText: '' } : {}), stages: ['ta', 'ft'] };
 }
+
+// ---- criterion kinds -----------------------------------------------------------------
+// inclusion: tick if met. exclusion: tick if it applies. paired: ONE criterion with an inclusion side (`text`)
+// and an exclusion side (`excludeText`), judged meets | unclear | fails; "fails" makes it an exclusion reason.
+// Paired judgements live in decision.marks { [criterionId]: state }; `checked` additionally lists paired
+// criteria that are met, so tools that only read `checked` keep working.
+// `mergedFrom` lists exclusion criteria folded into a pair: older decisions that ticked one count as "fails".
+export const PAIRED_STATES = [
+  { value: 'meets', label: 'meets', short: '✓' },
+  { value: 'unclear', label: 'unclear', short: '?' },
+  { value: 'fails', label: 'fails', short: '✗' },
+];
+
+// Criteria a record can be excluded for: plain exclusion criteria and paired criteria.
+export const canBeReason = (c) => c?.kind === 'exclusion' || c?.kind === 'paired';
+export const reasonCriteria = (review, stage) => criteriaFor(review, stage).filter(canBeReason);
+
+// A criterion's state in one decision: 'meets' | 'unclear' | 'fails' for paired criteria,
+// 'meets' / 'applies' for ticked inclusion / exclusion criteria, null if not judged.
+export function criterionState(d, c) {
+  if (!d || !c) return null;
+  const checked = d.checked || [];
+  if (c.kind === 'paired') {
+    const m = d.marks?.[c.id];
+    if (m) return m;
+    if ((c.mergedFrom || []).some((id) => checked.includes(id) || d.reason === id)) return 'fails';
+    return checked.includes(c.id) ? 'meets' : null;
+  }
+  if (!checked.includes(c.id)) return null;
+  return c.kind === 'exclusion' ? 'applies' : 'meets';
+}
+
+// Exclusion criteria that apply / paired criteria that fail, in criteria order.
+export const failedCriteria = (review, stage, d) =>
+  criteriaFor(review, stage).filter((c) => { const s = criterionState(d, c); return s === 'fails' || s === 'applies'; });
 
 export function newRun() {
   return {
@@ -158,6 +193,10 @@ export function newRun() {
 }
 
 export const criteriaFor = (review, stage) => review.criteria.filter((c) => c.stages.includes(stage));
+
+// Resolve a criterion id, including ids of exclusion criteria that were merged into a paired criterion.
+export const findCriterion = (review, id) =>
+  review.criteria.find((c) => c.id === id) || review.criteria.find((c) => (c.mergedFrom || []).includes(id));
 
 // Records that are part of the screening pool (not flagged as duplicates).
 export const uniqueRecords = (review) => review.records.filter((r) => !r.duplicateOf);
@@ -198,8 +237,29 @@ export const appraisalPool = codingPool;
 
 export const stagePool = (review, stage) => (stage === 'ta' ? uniqueRecords(review) : stage === 'ft' ? ftPool(review) : codingPool(review));
 
-// Calibration ("demo") set: the first N records of a stage's pool, screened separately from the main screening.
-export const calibrationSet = (review, stage) => stagePool(review, stage).slice(0, review.settings?.calibrationSize || 20);
+// ---- calibration set ---------------------------------------------------------------------------------
+// A random sample of a stage's pool (optionally of one search stream, settings.calibrationStream), screened separately
+// from the main screening. Random but reproducible: records are ordered by a hash of (seed, stage, record id) and the
+// first N are taken, so a larger N keeps the records of a smaller one. At title/abstract the drawn ids are stored in
+// review.calibration.ta when the lead starts the round (lock.js), so later imports never change the set.
+// Older reviews without a seed keep their set: the first N records in screening order.
+export const calibrationPool = (review, stage, stream = review.settings?.calibrationStream) => {
+  const runs = stream ? new Set((review.runs || []).filter((r) => (r.stream || '').trim() === stream).map((r) => r.id)) : null;
+  return stagePool(review, stage).filter((r) => !runs || runs.has(r.runId));
+};
+export const seededSample = (pool, seed, n) =>
+  pool.map((r) => [hash01(`${seed}|${r.id}`), r]).sort((a, b) => a[0] - b[0]).slice(0, n).map(([, r]) => r);
+
+export const calibrationSet = (review, stage) => {
+  const cal = review.calibration;
+  const size = review.settings?.calibrationSize || 20;
+  if (stage === 'ta' && Array.isArray(cal?.ta)) {
+    const byId = new Map(stagePool(review, 'ta').map((r) => [r.id, r]));
+    return cal.ta.map((id) => byId.get(id)).filter(Boolean);
+  }
+  const pool = calibrationPool(review, stage);
+  return cal?.seed ? seededSample(pool, `${cal.seed}|${stage}`, size) : pool.slice(0, size);
+};
 
 // Final codes of a record: consensus if set, otherwise those of the (human) coders; conflict if they differ.
 export function finalCoding(review, recordId) {
@@ -276,24 +336,25 @@ export const studyKey = (r) => r.studyOf || r.id;
 // A short hash of the criteria that applied at a stage. Agent decisions store it, so decisions made under
 // criteria that were changed later can be flagged.
 export function criteriaHash(review, stage) {
-  const text = criteriaFor(review, stage).map((c) => `${criterionCode(review, c.id)}|${c.kind}|${c.text.trim()}`).join('\n');
+  const text = criteriaFor(review, stage).map((c) => `${criterionCode(review, c.id)}|${c.kind}|${c.text.trim()}${c.kind === 'paired' ? `|${(c.excludeText || '').trim()}` : ''}`).join('\n');
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return `fnv1a:${(h >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 // Suggest a decision from the checklist; the reviewer always confirms.
-// Inclusion criteria without a group must all be met; for criteria sharing a `group`
-// (e.g. the RQ streams) at least one of the group must be met.
-export function suggestDecision(review, stage, checked) {
+// Any exclusion criterion that applies, or paired criterion that fails → exclude.
+// Inclusion criteria without a group and paired criteria must all be met; for criteria sharing a `group`
+// (e.g. the RQ streams) at least one of the group must be met. Anything else → full text (T/A).
+export function suggestDecision(review, stage, checked, marks = {}) {
+  const d = { checked, marks };
   const crit = criteriaFor(review, stage);
-  const exc = crit.filter((c) => c.kind === 'exclusion');
-  const inc = crit.filter((c) => c.kind === 'inclusion');
-  if (exc.some((c) => checked.includes(c.id))) return 'exclude';
+  if (failedCriteria(review, stage, d).length) return 'exclude';
+  const inc = crit.filter((c) => c.kind === 'inclusion' || c.kind === 'paired');
   if (inc.length) {
-    const solo = inc.filter((c) => !c.group);
-    const groups = [...new Set(inc.filter((c) => c.group).map((c) => c.group))];
-    const ok = solo.every((c) => checked.includes(c.id))
+    const solo = inc.filter((c) => !c.group || c.kind === 'paired');
+    const groups = [...new Set(inc.filter((c) => c.group && c.kind !== 'paired').map((c) => c.group))];
+    const ok = solo.every((c) => criterionState(d, c) === 'meets')
       && groups.every((g) => inc.some((c) => c.group === g && checked.includes(c.id)));
     if (ok) return 'include';
   }
@@ -301,19 +362,43 @@ export function suggestDecision(review, stage, checked) {
 }
 
 // Display code: an explicit `code` (e.g. "IC1", "RQ2", "E3") wins, otherwise ICn / ECn by position.
+// Paired criteria default to Cn ("criterion n").
 export const criterionCode = (review, id) => {
-  const i = review.criteria.findIndex((c) => c.id === id);
-  if (i < 0) return '?';
-  const c = review.criteria[i];
+  const c = findCriterion(review, id);
+  if (!c) return '?';
   if (c.code) return c.code;
+  const i = review.criteria.indexOf(c);
   const n = review.criteria.filter((x, j) => x.kind === c.kind && j <= i).length;
-  return `${c.kind === 'inclusion' ? 'IC' : 'EC'}${n}`;
+  return `${{ inclusion: 'IC', paired: 'C' }[c.kind] || 'EC'}${n}`;
 };
 
 export const criterionLabel = (review, id) => {
-  const c = review.criteria.find((x) => x.id === id);
+  const c = findCriterion(review, id);
   return c ? `${criterionCode(review, id)}: ${c.text}` : '(deleted criterion)';
 };
+
+// Label of an exclusion reason: for a paired criterion its exclusion side (falls back to the inclusion side).
+export const reasonLabel = (review, id) => {
+  const c = findCriterion(review, id);
+  if (!c) return '(deleted criterion)';
+  return `${criterionCode(review, id)}: ${c.kind === 'paired' ? (c.excludeText || '').trim() || c.text : c.text}`;
+};
+
+// Fold exclusion criterion `excId` into criterion `id` (which becomes paired). Past decisions stay readable:
+// ticks and reasons pointing at the old exclusion criterion count as "fails" for the pair.
+export function mergeIntoPair(review, id, excId) {
+  const exc = review.criteria.find((c) => c.id === excId);
+  if (!exc) return review;
+  return {
+    ...review,
+    criteria: review.criteria.filter((c) => c.id !== excId).map((c) => (c.id !== id ? c : {
+      ...c, kind: 'paired', group: undefined,
+      excludeText: (c.excludeText || '').trim() ? c.excludeText : exc.text,
+      mergedFrom: [...(c.mergedFrom || []), excId, ...(exc.mergedFrom || [])],
+      stages: [...new Set([...c.stages, ...exc.stages])],
+    })),
+  };
+}
 
 export const STREAM_VARIANTS = [
   { value: 'primary', label: 'Primary query' },
