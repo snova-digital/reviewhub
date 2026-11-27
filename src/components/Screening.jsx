@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { assignmentLabel, criteriaFor, criterionState, DECISIONS, DECISION_LABEL, failedCriteria, PAIRED_STATES, reasonCriteria, reasonLabel, suggestDecision, criterionCode } from '../lib/model.js';
+import { assignmentLabel, criteriaFor, criterionState, DECISIONS, DECISION_LABEL, failedCriteria, isScoped, PAIRED_STATES, reasonCriteria, reasonLabel, recordStreams, suggestDecision, criterionCode } from '../lib/model.js';
 import { Button, Kbd, Select, Textarea, Progress } from './ui.jsx';
 
 // Main screening vs. calibration ("demo") round on the first N records. Kept in the URL (?cal=1).
@@ -105,7 +105,7 @@ export function useDecisionForm(review, stage, record, mine) {
   useEffect(() => {
     setChecked(existing?.checked || []);
     // Paired criteria: explicit marks, or derived from older decisions (ticks, merged exclusion criteria).
-    setMarks(Object.fromEntries(criteriaFor(review, stage).filter((c) => c.kind === 'paired')
+    setMarks(Object.fromEntries(criteriaFor(review, stage, record).filter((c) => c.kind === 'paired')
       .map((c) => [c.id, criterionState(existing, c)]).filter(([, v]) => v)));
     setDecision(existing?.decision || null);
     setReason(existing?.reason || '');
@@ -114,7 +114,7 @@ export function useDecisionForm(review, stage, record, mine) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [record?.id]);
 
-  const suggested = suggestDecision(review, stage, checked, marks);
+  const suggested = suggestDecision(review, stage, checked, marks, record);
   const toggle = (id) => { setTouched(true); setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id])); };
   // Set a paired criterion to meets | unclear | fails, or clear it (null / same state again).
   const setMark = (id, state) => {
@@ -125,13 +125,13 @@ export function useDecisionForm(review, stage, record, mine) {
     });
   };
   const effective = decision || (touched ? suggested : null);
-  const failed = failedCriteria(review, stage, { checked, marks }).map((c) => c.id);
+  const failed = failedCriteria(review, stage, { checked, marks }, record).map((c) => c.id);
   const effectiveReason = reason || failed[0] || '';
   // Ids whose state is carried by `marks`: paired criteria and the exclusion criteria merged into them.
   const pairedIds = review.criteria.filter((c) => c.kind === 'paired').flatMap((c) => [c.id, ...(c.mergedFrom || [])]);
 
   return {
-    existing, checked, toggle, marks, setMark, pairedIds, decision: effective, setDecision, suggested, reason: effectiveReason, setReason, note, setNote, failed,
+    record, existing, checked, toggle, marks, setMark, pairedIds, decision: effective, setDecision, suggested, reason: effectiveReason, setReason, note, setNote, failed,
   };
 }
 
@@ -156,8 +156,16 @@ export function buildDecision(form, extra, reviewer) {
 }
 
 // ---- checklist -------------------------------------------------------------
+// Small tag on stream-specific criteria, so reviewers see why a criterion is (or is not) in the checklist.
+function StreamTag({ review, c }) {
+  return isScoped(review, c) ? <span className="ml-1.5 bg-indigo-50 px-1 text-[10px] font-medium text-indigo-800">{c.streams.join(' · ')}</span> : null;
+}
+
 export function CriteriaChecklist({ review, stage, form, evidenceCount }) {
-  const crit = criteriaFor(review, stage);
+  // Only the criteria that apply to this record: shared ones plus those of the search streams that found it.
+  const crit = criteriaFor(review, stage, form.record);
+  const streams = recordStreams(review, form.record);
+  const hidden = criteriaFor(review, stage).length - crit.length;
   const inc = crit.filter((c) => c.kind === 'inclusion');
   const paired = crit.filter((c) => c.kind === 'paired');
   const groupNames = [...new Set(inc.filter((c) => c.group).map((c) => c.group))];
@@ -171,6 +179,11 @@ export function CriteriaChecklist({ review, stage, form, evidenceCount }) {
   if (!crit.length) return <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-900">No criteria defined for this stage yet. Add them under Protocol & criteria.</div>;
   return (
     <div className="space-y-4">
+      {hidden > 0 && (
+        <div className="text-[11px] text-stone-500">
+          Found by stream{streams.length === 1 ? '' : 's'} <b>{streams.join(', ') || '—'}</b>: showing the shared criteria and those of {streams.length === 1 ? 'this stream' : 'these streams'} ({hidden} other{hidden === 1 ? '' : 's'} hidden).
+        </div>
+      )}
       {sections.map(({ key, kind, title, list }) => {
         if (!list.length) return null;
         return (
@@ -192,7 +205,7 @@ export function CriteriaChecklist({ review, stage, form, evidenceCount }) {
                   >
                     <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] ${on ? (kind === 'inclusion' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-rose-600 bg-rose-600 text-white') : 'border-stone-300'}`}>{on ? '✓' : ''}</span>
                     <span className="flex-1 leading-snug">
-                      <span className="mr-1 font-semibold text-stone-500">{criterionCode(review, c.id)}</span>{c.text}
+                      <span className="mr-1 font-semibold text-stone-500">{criterionCode(review, c.id)}</span>{c.text}<StreamTag review={review} c={c} />
                       {evidenceCount?.[c.id] > 0 && <span className="ml-1.5 rounded bg-yellow-100 px-1 text-[10px] text-yellow-800">{evidenceCount[c.id]} evidence</span>}
                     </span>
                     {n <= 9 && <Kbd>{n}</Kbd>}
@@ -222,7 +235,7 @@ function PairedRow({ review, c, n, form, evidence }) {
       {/* Hidden target for the 1–9 keyboard shortcut: cycles the state. */}
       <button type="button" data-crit-key={n} className="hidden" onClick={() => form.setMark(c.id, CYCLE[state] ?? null)} />
       <div className="flex items-start gap-2">
-        <span className="font-semibold text-stone-500">{criterionCode(review, c.id)}</span>
+        <span className="font-semibold text-stone-500">{criterionCode(review, c.id)}<StreamTag review={review} c={c} /></span>
         <div className="flex-1 space-y-0.5 leading-snug">
           <div><span className="mr-1 text-[10px] font-semibold uppercase text-emerald-700">in</span>{c.text}</div>
           {c.excludeText && <div className="text-stone-600"><span className="mr-1 text-[10px] font-semibold uppercase text-rose-700">out</span>{c.excludeText}</div>}
@@ -244,7 +257,7 @@ function PairedRow({ review, c, n, form, evidence }) {
 
 export function DecisionPanel({ review, stage, form, onSave, saving, requireReason }) {
   const options = DECISIONS[stage];
-  const excl = reasonCriteria(review, stage);
+  const excl = reasonCriteria(review, stage, form.record);
   const missingReason = requireReason && form.decision === 'exclude' && !form.reason;
   return (
     <div className="space-y-3">

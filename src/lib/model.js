@@ -153,7 +153,7 @@ export const PAIRED_STATES = [
 
 // Criteria a record can be excluded for: plain exclusion criteria and paired criteria.
 export const canBeReason = (c) => c?.kind === 'exclusion' || c?.kind === 'paired';
-export const reasonCriteria = (review, stage) => criteriaFor(review, stage).filter(canBeReason);
+export const reasonCriteria = (review, stage, record = null) => criteriaFor(review, stage, record).filter(canBeReason);
 
 // A criterion's state in one decision: 'meets' | 'unclear' | 'fails' for paired criteria,
 // 'meets' / 'applies' for ticked inclusion / exclusion criteria, null if not judged.
@@ -171,8 +171,8 @@ export function criterionState(d, c) {
 }
 
 // Exclusion criteria that apply / paired criteria that fail, in criteria order.
-export const failedCriteria = (review, stage, d) =>
-  criteriaFor(review, stage).filter((c) => { const s = criterionState(d, c); return s === 'fails' || s === 'applies'; });
+export const failedCriteria = (review, stage, d, record = null) =>
+  criteriaFor(review, stage, record).filter((c) => { const s = criterionState(d, c); return s === 'fails' || s === 'applies'; });
 
 export function newRun() {
   return {
@@ -192,7 +192,31 @@ export function newRun() {
   };
 }
 
-export const criteriaFor = (review, stage) => review.criteria.filter((c) => c.stages.includes(stage));
+// ---- criteria per search stream ------------------------------------------------------------------------
+// A criterion can be limited to search streams (criterion.streams = ['RQ1', …]; empty = every record). A record's
+// streams are those of its own run plus the runs of its flagged duplicates (found by several streams).
+// Stream scopes only count while search streams are switched on in the settings.
+export const streamNames = (review) => [...new Set((review.runs || []).map((r) => (r.stream || '').trim()).filter(Boolean))];
+
+const dupRuns = new WeakMap(); // review.records → Map(canonical id → [runId of each duplicate])
+export function recordStreams(review, record) {
+  if (!record) return [];
+  let byOrig = dupRuns.get(review.records);
+  if (!byOrig) {
+    byOrig = new Map();
+    for (const r of review.records || []) if (r.duplicateOf) byOrig.set(r.duplicateOf, [...(byOrig.get(r.duplicateOf) || []), r.runId]);
+    dupRuns.set(review.records, byOrig);
+  }
+  const streamOf = new Map((review.runs || []).map((r) => [r.id, (r.stream || '').trim()]));
+  return [...new Set([record.runId, ...(byOrig.get(record.id) || [])].map((id) => streamOf.get(id)).filter(Boolean))];
+}
+export const isScoped = (review, c) => !!c.streams?.length && !!reviewSettings(review).streams;
+export const criterionApplies = (review, c, record) =>
+  !record || !isScoped(review, c) || c.streams.some((s) => recordStreams(review, record).includes(s));
+
+// Criteria of a stage; with `record`, only those that apply to it (shared ones + those of its streams).
+export const criteriaFor = (review, stage, record = null) =>
+  review.criteria.filter((c) => c.stages.includes(stage) && criterionApplies(review, c, record));
 
 // Resolve a criterion id, including ids of exclusion criteria that were merged into a paired criterion.
 export const findCriterion = (review, id) =>
@@ -237,28 +261,55 @@ export const appraisalPool = codingPool;
 
 export const stagePool = (review, stage) => (stage === 'ta' ? uniqueRecords(review) : stage === 'ft' ? ftPool(review) : codingPool(review));
 
-// ---- calibration set ---------------------------------------------------------------------------------
-// A random sample of a stage's pool (optionally of one search stream, settings.calibrationStream), screened separately
-// from the main screening. Random but reproducible: records are ordered by a hash of (seed, stage, record id) and the
-// first N are taken, so a larger N keeps the records of a smaller one. At title/abstract the drawn ids are stored in
-// review.calibration.ta when the lead starts the round (lock.js), so later imports never change the set.
-// Older reviews without a seed keep their set: the first N records in screening order.
-export const calibrationPool = (review, stage, stream = review.settings?.calibrationStream) => {
-  const runs = stream ? new Set((review.runs || []).filter((r) => (r.stream || '').trim() === stream).map((r) => r.id)) : null;
+// ---- calibration rounds -------------------------------------------------------------------------------
+// review.calibration.rounds = [{ n, startedAt, startedBy, reason, method: 'random', seed, size, stream, poolSize,
+// drawnAt, ta: [recordId], closedAt?, closedBy?, results?, criteria? }]; the last one is the current round (lock.js).
+// Each round is a random but reproducible sample: records are ordered by a hash of (seed, stage, record id) and the
+// first N are taken. Records of earlier rounds are left out, so every round uses fresh records.
+// stream: '' = all records, a stream name = that stream only, STRATIFIED = the same number from every stream.
+// Older reviews without rounds keep their set: the first N records in screening order.
+export const STRATIFIED = '*';
+// Reviews calibrated with 0.1.x stored a single round as review.calibration = { seed, ta, … }: read it as round 1.
+export const calibrationRounds = (review) => {
+  const cal = review.calibration;
+  if (Array.isArray(cal?.rounds)) return cal.rounds;
+  return Array.isArray(cal?.ta) ? [{ n: 1, reason: '', ...cal }] : [];
+};
+export const currentCalibrationRound = (review) => calibrationRounds(review).at(-1) || null;
+
+export const calibrationPool = (review, stage, stream = '') => {
+  const named = stream === STRATIFIED ? new Set(streamNames(review)) : stream ? new Set([stream]) : null;
+  const runs = named ? new Set((review.runs || []).filter((r) => named.has((r.stream || '').trim())).map((r) => r.id)) : null;
   return stagePool(review, stage).filter((r) => !runs || runs.has(r.runId));
 };
 export const seededSample = (pool, seed, n) =>
   pool.map((r) => [hash01(`${seed}|${r.id}`), r]).sort((a, b) => a[0] - b[0]).slice(0, n).map(([, r]) => r);
 
-export const calibrationSet = (review, stage) => {
-  const cal = review.calibration;
-  const size = review.settings?.calibrationSize || 20;
-  if (stage === 'ta' && Array.isArray(cal?.ta)) {
-    const byId = new Map(stagePool(review, 'ta').map((r) => [r.id, r]));
-    return cal.ta.map((id) => byId.get(id)).filter(Boolean);
+export function drawSample(review, stage, { seed, size, stream = '', exclude = new Set() }) {
+  const salt = `${seed}|${stage}`;
+  const fresh = (s) => calibrationPool(review, stage, s).filter((r) => !exclude.has(r.id));
+  if (stream !== STRATIFIED) return seededSample(fresh(stream), salt, size);
+  // Stratified: take records from each stream in turn (each in its own seeded order) until the sample is full.
+  const strata = streamNames(review).map((s) => seededSample(fresh(s), salt, Infinity));
+  const out = []; const seen = new Set();
+  for (let i = 0; out.length < size && strata.some((st) => i < st.length); i++) {
+    for (const st of strata) {
+      const r = st[i];
+      if (r && !seen.has(r.id) && out.length < size) { seen.add(r.id); out.push(r); }
+    }
   }
-  const pool = calibrationPool(review, stage);
-  return cal?.seed ? seededSample(pool, `${cal.seed}|${stage}`, size) : pool.slice(0, size);
+  return out;
+}
+
+export const calibrationSet = (review, stage) => {
+  const round = currentCalibrationRound(review);
+  if (stage === 'ta' && Array.isArray(round?.ta)) {
+    const byId = new Map(stagePool(review, 'ta').map((r) => [r.id, r]));
+    return round.ta.map((id) => byId.get(id)).filter(Boolean);
+  }
+  const size = round?.size || review.settings?.calibrationSize || 20;
+  if (round?.seed) return drawSample(review, stage, { seed: round.seed, size, stream: round.stream || '' });
+  return calibrationPool(review, stage, review.settings?.calibrationStream || '').slice(0, size);
 };
 
 // Final codes of a record: consensus if set, otherwise those of the (human) coders; conflict if they differ.
@@ -336,7 +387,7 @@ export const studyKey = (r) => r.studyOf || r.id;
 // A short hash of the criteria that applied at a stage. Agent decisions store it, so decisions made under
 // criteria that were changed later can be flagged.
 export function criteriaHash(review, stage) {
-  const text = criteriaFor(review, stage).map((c) => `${criterionCode(review, c.id)}|${c.kind}|${c.text.trim()}${c.kind === 'paired' ? `|${(c.excludeText || '').trim()}` : ''}`).join('\n');
+  const text = criteriaFor(review, stage).map((c) => `${criterionCode(review, c.id)}|${c.kind}|${c.text.trim()}${c.kind === 'paired' ? `|${(c.excludeText || '').trim()}` : ''}${c.streams?.length ? `|streams:${[...c.streams].sort().join(',')}` : ''}`).join('\n');
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return `fnv1a:${(h >>> 0).toString(16).padStart(8, '0')}`;
@@ -346,18 +397,24 @@ export function criteriaHash(review, stage) {
 // Any exclusion criterion that applies, or paired criterion that fails → exclude.
 // Inclusion criteria without a group and paired criteria must all be met; for criteria sharing a `group`
 // (e.g. the RQ streams) at least one of the group must be met. Anything else → full text (T/A).
-export function suggestDecision(review, stage, checked, marks = {}) {
+// Stream-specific criteria (with `record`): the shared criteria must hold, and the record must pass the criteria of at
+// least one of its streams. It is excluded only if the shared criteria fail or every one of its streams fails.
+export function suggestDecision(review, stage, checked, marks = {}, record = null) {
   const d = { checked, marks };
-  const crit = criteriaFor(review, stage);
-  if (failedCriteria(review, stage, d).length) return 'exclude';
-  const inc = crit.filter((c) => c.kind === 'inclusion' || c.kind === 'paired');
-  if (inc.length) {
+  const crit = criteriaFor(review, stage, record);
+  const fails = (list) => list.some((c) => { const s = criterionState(d, c); return s === 'fails' || s === 'applies'; });
+  const meets = (list) => {
+    const inc = list.filter((c) => c.kind === 'inclusion' || c.kind === 'paired');
     const solo = inc.filter((c) => !c.group || c.kind === 'paired');
     const groups = [...new Set(inc.filter((c) => c.group && c.kind !== 'paired').map((c) => c.group))];
-    const ok = solo.every((c) => criterionState(d, c) === 'meets')
-      && groups.every((g) => inc.some((c) => c.group === g && checked.includes(c.id)));
-    if (ok) return 'include';
-  }
+    return solo.every((c) => criterionState(d, c) === 'meets') && groups.every((g) => inc.some((c) => c.group === g && checked.includes(c.id)));
+  };
+  const shared = crit.filter((c) => !isScoped(review, c));
+  const scoped = crit.filter((c) => isScoped(review, c));
+  const blocks = scoped.length ? recordStreams(review, record).map((s) => scoped.filter((c) => c.streams.includes(s))).filter((b) => b.length) : [];
+  if (fails(shared) || (blocks.length && blocks.every(fails))) return 'exclude';
+  const hasInclusion = crit.some((c) => c.kind === 'inclusion' || c.kind === 'paired');
+  if (hasInclusion && meets(shared) && (!blocks.length || blocks.some((b) => !fails(b) && meets(b)))) return 'include';
   return stage === 'ta' ? 'unclear' : null;
 }
 

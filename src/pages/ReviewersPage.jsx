@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useReview } from '../lib/store.jsx';
 import {
-  ASSIGNMENT_MODES, assignmentLabel, criteriaFor, criteriaHash, criterionCode, decisionsOf, emptyDecisions, isAssigned, newReviewer, stagePool, workStagesFor,
+  ASSIGNMENT_MODES, assignmentLabel, criteriaFor, criteriaHash, criterionCode, decisionsOf, emptyDecisions, isAssigned, isScoped, newReviewer, recordStreams, stagePool, workStagesFor,
 } from '../lib/model.js';
 import { guide, reviewSettings } from '../lib/methods.js';
 import { Badge, Button, Card, Field, Input, SectionTitle, Select } from '../components/ui.jsx';
@@ -271,15 +271,18 @@ function LlmTools() {
     const pool = stagePool(review, stage).filter((r) => isAssigned(target, stage, r.id));
     download(`${slug(review.title)}-llm-${stage}-records.csv`, Papa.unparse(pool.map((r) => ({
       record_id: r.id, title: r.title, abstract: r.abstract, keywords: r.keywords.join('; '), year: r.year, journal: r.journal, doi: r.doi,
+      streams: recordStreams(review, r).join('; '),
     }))), 'text/csv');
     const crit = criteriaFor(review, stage);
+    const only = (c) => (isScoped(review, c) ? ` _(only for records of stream ${c.streams.join(' or ')})_` : '');
     download(`${slug(review.title)}-llm-${stage}-criteria.md`, [
       `# ${review.title}: eligibility criteria (${stage === 'ta' ? 'title/abstract' : 'full text'})`, '',
       '## Review questions', ...review.protocol.questions.map((q) => `- ${q}`), '',
       ...(crit.some((c) => c.kind === 'paired') ? ['## Eligibility criteria (judge each: meets / unclear / fails)',
-        ...crit.filter((c) => c.kind === 'paired').map((c) => `- **${criterionCode(review, c.id)}** Include: ${c.text}${c.excludeText ? ` | Exclude: ${c.excludeText}` : ''}`), ''] : []),
-      '## Inclusion criteria', ...crit.filter((c) => c.kind === 'inclusion').map((c) => `- **${criterionCode(review, c.id)}** ${c.text}`), '',
-      '## Exclusion criteria', ...crit.filter((c) => c.kind === 'exclusion').map((c) => `- **${criterionCode(review, c.id)}** ${c.text}`), '',
+        ...crit.filter((c) => c.kind === 'paired').map((c) => `- **${criterionCode(review, c.id)}** Include: ${c.text}${c.excludeText ? ` | Exclude: ${c.excludeText}` : ''}${only(c)}`), ''] : []),
+      '## Inclusion criteria', ...crit.filter((c) => c.kind === 'inclusion').map((c) => `- **${criterionCode(review, c.id)}** ${c.text}${only(c)}`), '',
+      '## Exclusion criteria', ...crit.filter((c) => c.kind === 'exclusion').map((c) => `- **${criterionCode(review, c.id)}** ${c.text}${only(c)}`), '',
+      ...(crit.some((c) => isScoped(review, c)) ? ['Criteria marked "only for records of stream …" apply only to records whose `streams` column contains that stream. Judge every other record against the remaining criteria; a record found by several streams is included if it meets the criteria of at least one of them.', ''] : []),
       '## Expected output (CSV)',
       'record_id, decision (include | exclude | fulltext), criteria (space-separated codes that apply; for eligibility criteria CODE=meets|unclear|fails), reason (code of the primary exclusion criterion), confidence (0–1), rationale (one or two sentences: how you arrived at the decision), note',
       '', `Criteria fingerprint: ${criteriaHash(review, stage)} (decisions are flagged if the criteria change afterwards).`,

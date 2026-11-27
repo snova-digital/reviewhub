@@ -2,9 +2,10 @@
 // FINAL values only (consensus, or agreement of the human reviewers); per-reviewer raw decisions are not included,
 // except pairwise agreement statistics. Used by the Export page (download) and by the CLI (`rh paper`, written to disk).
 // Plain ESM without browser APIs, so Node can import it.
+import { calibrationResults } from './lock.js';
 import { prismaCounts } from './prisma.js';
 import { cohen, compareCoding, comparePair } from './agreement.js';
-import { codingPool, criterionCode, reasonLabel, decisionsOf, finalAppraisal, finalCoding, finalDecision, finalField, ftPool, settledCodes } from './model.js';
+import { calibrationRounds, codingPool, criterionCode, reasonLabel, STRATIFIED, decisionsOf, finalAppraisal, finalCoding, finalDecision, finalField, ftPool, settledCodes } from './model.js';
 import { frameworkElements, frameworkValues, profileOf, reviewSettings } from './methods.js';
 
 export const PAPER_DATA_VERSION = 1;
@@ -86,10 +87,13 @@ export function buildPaperData(review, { version = null, generatedAt = new Date(
         evidenceSources: p.evidenceSources || '', deviations: p.notes || '',
         // Official start and every change acknowledged afterwards (lock.js), for the deviations section.
         startedAt: review.lock?.startedAt || null,
-        // Optional calibration (pilot) round: how its title/abstract set was drawn.
-        calibration: review.calibration?.seed
-          ? { method: 'random', size: review.calibration.ta?.length ?? null, poolSize: review.calibration.poolSize, stream: review.calibration.stream || null, seed: review.calibration.seed, drawnAt: review.calibration.drawnAt }
-          : null,
+        // Optional calibration (pilot) rounds: how each title/abstract set was drawn, why the round was run, and its
+        // agreement (saved when the next round started; the current round is computed now).
+        calibrationRounds: calibrationRounds(review).map((r, i, all) => ({
+          round: r.n, startedAt: r.startedAt, closedAt: r.closedAt || null, reason: r.reason || '',
+          sample: { method: r.method, size: r.ta?.length ?? r.size, poolSize: r.poolSize, stream: r.stream === STRATIFIED ? 'stratified' : r.stream || null, seed: r.seed },
+          results: i === all.length - 1 && !r.closedAt ? calibrationResults(review) : r.results || null,
+        })),
         amendments: (review.lock?.log || []).filter((e) => e.kind === 'amendment' || e.kind === 'restart').map((e) => ({
           kind: e.kind, at: e.at, by: reviewers.find((rv) => rv.id === e.by)?.name || null, reason: e.reason || '',
           changes: (e.changes || []).map((c) => c.label), decisionsBefore: e.decisionsBefore ?? e.decisionsArchived ?? null,

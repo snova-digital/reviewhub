@@ -5,11 +5,13 @@ import { useReview } from '../lib/store.jsx';
 import { api } from '../lib/api.js';
 import { reviewStages } from '../lib/progress.js';
 import {
-  acknowledgeChanges, calibrationStarted, calibrationStreams, calibrationSummary, canManage, changeCalibration, canRevert, isStarted, leadsOf, mainDecisionCount, planChanges,
+  acknowledgeChanges, calibrationPreview, calibrationResults, calibrationStarted, calibrationStreams, calibrationSummary, canManage, changeCalibration,
+  currentRoundHasDecisions, headlinePair, roundSummary, startNextRound, canRevert, isStarted, leadsOf, mainDecisionCount, planChanges,
   restartReview, revertChanges, startCalibration, startReview, workBlock,
 } from '../lib/lock.js';
 import { guide } from '../lib/methods.js';
-import { calibrationPool, calibrationSet, decisionsOf, isHuman, uniqueRecords } from '../lib/model.js';
+import { calibrationRounds, calibrationSet, currentCalibrationRound, decisionsOf, isHuman, STRATIFIED } from '../lib/model.js';
+import { fmtK, pct } from '../lib/agreement.js';
 import { Badge, Button, Card, Field, Input, Select, Textarea } from './ui.jsx';
 
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '');
@@ -222,7 +224,7 @@ function Checklist({ checks }) {
   );
 }
 
-// Who has finished the calibration set: [{ rv, done, total }].
+// Who has finished the current calibration set: [{ rv, done, total }].
 function calibrationProgress(review) {
   const set = calibrationSet(review, 'ta');
   return review.reviewers.map((rv) => {
@@ -233,72 +235,148 @@ function calibrationProgress(review) {
 
 const FREEZE_WARNING = 'Starting the full review freezes the current state of step 1 (protocol & criteria) and step 2 (searches & import), together with the method settings (review type, framework, appraisal, deduplication). Any change after that pauses screening for every reviewer until the lead acknowledges it as a protocol amendment, undoes it, or restarts the review.';
 
+// Size + stream of a calibration sample, with a live count of the fresh records it would get.
+function SampleInputs({ review, size, setSize, stream, setStream, replacing = false }) {
+  const streams = calibrationStreams(review);
+  const { pool, n } = calibrationPreview(review, { size, stream, replacing });
+  const fresh = calibrationRounds(review).length > (replacing ? 1 : 0);
+  return (
+    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <Field label="Records in the calibration set" hint="JBI suggests about 25–50">
+        <Input type="number" min={5} max={500} value={size} onChange={(e) => setSize(Math.max(1, Number(e.target.value) || 0))} />
+      </Field>
+      {streams.length > 0 && (
+        <Field label="Drawn from" hint="Stratified: the same number from every stream, so each stream's criteria are tested">
+          <Select value={stream} onChange={(e) => setStream(e.target.value)}>
+            <option value="">All records (random)</option>
+            <option value={STRATIFIED}>Every stream equally (stratified)</option>
+            {streams.map((s) => <option key={s} value={s}>Stream {s} only</option>)}
+          </Select>
+        </Field>
+      )}
+      <div className="text-xs text-stone-500 sm:col-span-2">
+        A random sample of <b>{n}</b> of {pool} {fresh ? 'fresh ' : ''}record{pool === 1 ? '' : 's'}{stream === STRATIFIED ? ', spread evenly across the streams' : stream ? ` of stream ${stream}` : ''}, drawn once and the same for every reviewer.
+        {fresh && ' Records from earlier rounds are left out.'} The draw is reproducible (its seed is stored) and later imports never change it.
+      </div>
+    </div>
+  );
+}
+
+const fmtPair = (p) => (p ? `${pct(p.agree)} agreement · κ ${fmtK(p.kappa)} (${p.a} × ${p.b}, n = ${p.n})` : 'not enough decisions yet');
+
+// Rounds so far, the current round's live agreement, and (lead) starting the next round. Used in step 4 and in
+// Compare & consensus → Calibration.
+export function CalibrationRounds({ compact = false }) {
+  const { review, update, me } = useReview();
+  const manage = canManage(review, me);
+  const rounds = calibrationRounds(review);
+  const cur = rounds.at(-1);
+  const live = useMemo(() => (cur ? calibrationResults(review) : null), [review, cur]);
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [size, setSize] = useState(cur?.size || review.settings?.calibrationSize || 25);
+  const [stream, setStream] = useState(cur?.stream || '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  if (!cur) {
+    return calibrationStarted(review)
+      ? <p className="text-sm text-stone-600">This calibration round was run before numbered rounds existed: {calibrationSummary(review)}.</p>
+      : null;
+  }
+  const { n: preview } = calibrationPreview(review, { size, stream });
+  const next = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await api.backup(review.id);
+      await update((r) => startNextRound(r, me, { reason, size, stream }), { immediate: true });
+      setOpen(false); setReason('');
+    } catch (e) { setErr(`Could not start the next round (${e.message}). Nothing was changed.`); } finally { setBusy(false); }
+  };
+  const target = guide(review, 'pilotTarget');
+  return (
+    <div className="space-y-3 text-sm">
+      <div>
+        <b>Round {cur.n}</b> · since {fmtDate(cur.startedAt)} · {roundSummary(cur)}
+        {cur.reason && <div className="text-xs text-stone-600">Started because: {cur.reason}</div>}
+        <div className="mt-1">Agreement so far: {fmtPair(headlinePair(live))} <span className="text-xs text-stone-500">({target})</span></div>
+      </div>
+      {rounds.length > 1 && (
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-stone-500"><th className="py-1 font-medium">Round</th><th className="font-medium">Sample</th><th className="font-medium">Agreement</th><th className="font-medium">κ</th>{!compact && <th className="font-medium">Then changed</th>}</tr></thead>
+          <tbody>
+            {rounds.slice(0, -1).map((r, i) => {
+              const h = headlinePair(r.results);
+              return (
+                <tr key={r.n} className="border-t border-stone-100 align-top">
+                  <td className="py-1 pr-2">{r.n}</td>
+                  <td className="pr-2">{r.ta?.length} {r.stream === STRATIFIED ? '· stratified' : r.stream ? `· ${r.stream}` : ''}</td>
+                  <td className="pr-2 tabular-nums">{h ? pct(h.agree) : '–'}</td>
+                  <td className="pr-2 tabular-nums">{h ? fmtK(h.kappa) : '–'}</td>
+                  {!compact && <td className="text-stone-600">{rounds[i + 1]?.reason}</td>}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {manage && !open && <Button size="sm" onClick={() => setOpen(true)}>Start round {cur.n + 1}…</Button>}
+      {manage && open && (
+        <div className="space-y-2 bg-stone-100 p-3">
+          <div>
+            Round {cur.n} is closed with its results and the criteria as they are now. Every reviewer&apos;s round {cur.n} decisions are archived (not deleted, and a backup is taken first), and round {cur.n + 1} starts on fresh records.
+          </div>
+          <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What changed since this round? e.g. IC2 reworded (pilot κ 0.38); EC3 now also covers conference abstracts." />
+          <SampleInputs review={review} size={size} setSize={setSize} stream={stream} setStream={setStream} />
+          {err && <div className="text-rose-700">{err}</div>}
+          <div className="flex gap-2">
+            <Button tone="amber" disabled={busy || reason.trim().length < 10 || !preview} onClick={next}>{busy ? 'Starting…' : `Close round ${cur.n} and start round ${cur.n + 1}`}</Button>
+            <Button tone="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function StartChoice() {
   const { review, update, me } = useReview();
   const manage = canManage(review, me);
   const { steps } = useMemo(() => reviewStages(review), [review]);
   const checks = readiness(review, steps);
   const running = calibrationStarted(review);
-  const streams = calibrationStreams(review);
-  const [size, setSize] = useState(review.settings?.calibrationSize || 20);
-  const [stream, setStream] = useState(streams.includes(review.settings?.calibrationStream) ? review.settings.calibrationStream : '');
+  const cur = currentCalibrationRound(review);
+  const [size, setSize] = useState(cur?.size || review.settings?.calibrationSize || 25);
+  const [stream, setStream] = useState(cur?.stream || '');
   const [confirming, setConfirming] = useState(false);
   const [understood, setUnderstood] = useState(false);
 
-  const poolSize = calibrationPool(review, 'ta', stream).length;
-  const preview = Math.min(size, poolSize);
-  const seeded = !running || !!review.calibration?.seed;
   const progress = calibrationProgress(review);
   const finished = progress.filter((p) => isHuman(p.rv) && p.total > 0 && p.done === p.total).length;
   const humans = progress.filter((p) => isHuman(p.rv)).length;
-  const unique = uniqueRecords(review).length;
-  const setChanged = size !== (review.settings?.calibrationSize || 20) || stream !== (review.settings?.calibrationStream || '');
-  const saveSet = () => update((r) => changeCalibration(r, { size, stream }), { immediate: true });
+  const { n: preview } = calibrationPreview(review, { size, stream, replacing: !!cur });
   const leads = leadNames(review);
-
-  const setInputs = manage && (
-    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-      <Field label="Records in the calibration set" hint={`of ${unique} unique records; JBI suggests 25–50`}>
-        <Input type="number" min={5} max={500} value={size} onChange={(e) => setSize(Math.max(1, Number(e.target.value) || 0))} />
-      </Field>
-      {streams.length > 0 && (
-        <Field label="From search stream" hint="Calibrate on one stream, or on all records">
-          <Select value={stream} onChange={(e) => setStream(e.target.value)}>
-            <option value="">All streams</option>
-            {streams.map((s) => <option key={s} value={s}>{s}</option>)}
-          </Select>
-        </Field>
-      )}
-      <div className="text-xs text-stone-500 sm:col-span-2">
-        {seeded
-          ? <>A random sample of {preview} of the {poolSize} unique record{poolSize === 1 ? '' : 's'}{stream ? ` of stream ${stream}` : ''}, drawn once and the same for every reviewer. The draw is reproducible (its seed is stored) and later imports never change it.</>
-          : <>This older calibration round uses the first {preview} record{preview === 1 ? '' : 's'}{stream ? ` of stream ${stream}` : ''} in screening order.</>}
-      </div>
-    </div>
-  );
+  // The current round's set can still be corrected while nobody has screened in it.
+  const correctable = manage && cur && !currentRoundHasDecisions(review);
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-10">
       <h1 className="brand-bar text-3xl font-bold lowercase tracking-tight">title / abstract screening: how do you want to begin?</h1>
       <p className="mt-4 max-w-3xl text-sm font-light text-stone-600">
-        You can test the criteria with a calibration round first (optional), or start the full review straight away. {guide(review, 'pilotTip')}
+        You can test the criteria in one or more calibration rounds first (optional), or start the full review straight away. {guide(review, 'pilotTip')}
       </p>
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
-        {/* Optional calibration round */}
+        {/* Optional calibration rounds */}
         <Card className="flex flex-col border-t-4 border-t-amber-500 p-6">
           <div className="flex items-center gap-2"><span className="text-xl font-bold lowercase">calibration round</span><Badge tone="unclear">optional</Badge></div>
           <p className="mt-2 text-sm text-stone-700">
-            Every reviewer screens the same small set on their own. You then compare agreement per criterion under Compare &amp; consensus and sharpen the wording. Calibration decisions never count for PRISMA, and steps 1 and 2 stay editable.
+            Every reviewer screens the same small random set on their own. You then compare agreement per criterion under Compare &amp; consensus and sharpen the wording; after changes, run another round on fresh records. Calibration decisions never count for PRISMA, and steps 1 and 2 stay editable.
           </p>
-          {!running && setInputs}
-          {!running && manage && <Button tone="amber" className="mt-5 self-start" disabled={!preview} onClick={() => update((r) => startCalibration(r, me, { size, stream }), { immediate: true })}>Start calibration round</Button>}
+          {!running && manage && <SampleInputs review={review} size={size} setSize={setSize} stream={stream} setStream={setStream} />}
+          {!running && manage && <Button tone="amber" className="mt-5 self-start" disabled={!preview} onClick={() => update((r) => startCalibration(r, me, { size, stream }), { immediate: true })}>Start calibration round 1</Button>}
           {!running && !manage && <p className="mt-4 text-sm text-stone-600">The lead reviewer ({leads}) decides whether to run a calibration round.</p>}
           {running && (
             <>
-              <div className="mt-4 text-sm">
-                <b>Running</b>{review.calibration?.startedAt ? ` since ${fmtDate(review.calibration.startedAt)}` : ''}: {calibrationSummary(review)}.
-              </div>
-              <ul className="mt-2 space-y-1 text-sm">
+              <ul className="mt-4 space-y-1 text-sm">
                 {progress.map(({ rv, done, total }) => (
                   <li key={rv.id} className="flex justify-between gap-3">
                     <span>{rv.name}{rv.type === 'llm' && <span className="ml-1 text-xs text-indigo-700">LLM</span>}{rv.id === me && <span className="ml-1 text-xs text-stone-500">(you)</span>}</span>
@@ -306,16 +384,16 @@ export function StartChoice() {
                   </li>
                 ))}
               </ul>
-              <div className="mt-5 flex flex-wrap gap-2">
+              <div className="mt-4 flex flex-wrap gap-2">
                 <Link to="?cal=1"><Button tone="amber">Go to the calibration round</Button></Link>
                 <Link to="../compare?cal=1"><Button>Compare results</Button></Link>
               </div>
-              {manage && (
+              <div className="mt-5 border-t border-stone-200 pt-4"><CalibrationRounds compact /></div>
+              {correctable && (
                 <details className="mt-4 text-sm">
-                  <summary className="cursor-pointer text-stone-600 underline">Change the calibration set</summary>
-                  {setInputs}
-                  <p className="mt-2 text-xs text-stone-500">Changing the set changes it for every reviewer.{seeded ? ' It is redrawn with the same seed, so records already in the set stay in it as far as possible.' : ''} Decisions already made are kept.</p>
-                  <Button size="sm" className="mt-2" disabled={!setChanged || !preview} onClick={saveSet}>Save calibration set</Button>
+                  <summary className="cursor-pointer text-stone-600 underline">Correct the set of round {cur.n} (nobody has screened in it yet)</summary>
+                  <SampleInputs review={review} size={size} setSize={setSize} stream={stream} setStream={setStream} replacing />
+                  <Button size="sm" className="mt-2" disabled={!preview} onClick={() => update((r) => changeCalibration(r, { size, stream }), { immediate: true })}>Save calibration set</Button>
                 </details>
               )}
             </>

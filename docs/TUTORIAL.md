@@ -154,6 +154,8 @@ You can switch a criterion's type later. *Fold in exclusion…* turns an existin
 
 Criteria get short codes (EC1, IC1, E1, …) that appear in the checklist while screening, and that the exclusion reasons and κ per criterion refer to. Pilot them with your co-reviewer before screening everything (see 4.5).
 
+**Criteria per search stream.** With search streams switched on (settings), each criterion has an *applies to* choice: *all streams*, or one or more streams (e.g. only RQ2). A record is screened against the shared criteria plus those of every stream that found it; for records found by several streams (duplicates across streams) that is the union. The checklist shows which streams found the record and hides criteria that don't apply. The suggested decision includes a record if it meets the shared criteria and those of at least one of its streams. Agreement per criterion is computed only on the records the criterion applies to. If you need criteria for a single search run, give that run its own stream.
+
 ### 4.3 Searches & import
 
 Create one **search run** per database and search session. Record:
@@ -176,7 +178,8 @@ Attach PDFs here or later. *Attach PDFs in bulk* matches files by Zotero file pa
 
 When protocol, criteria and searches are ready, open step 4, **title / abstract screening**. Until the review is started it asks how you want to begin, and only the lead reviewer can choose:
 
-- **Calibration round (optional)**: set how many records it uses (JBI suggests about 25–50) and, with search streams switched on, which stream they come from. ReviewHub draws a **random sample** of that size once, when the round starts. Every reviewer then screens that same set (see 4.5). The draw is reproducible (its seed is stored), later imports never change it, and the step 4 card shows a line for your methods section, e.g. *random sample of 25 of 1,340 records*. Steps 1 and 2 stay editable, so you can still sharpen the criteria. The card shows who has finished and links to the comparison.
+- **Calibration rounds (optional)**: set how many records round 1 uses (JBI suggests about 25–50) and, with search streams switched on, where they come from: all records, **every stream equally (stratified)**, or one stream. Use *stratified* when streams have their own criteria, so each stream's criteria are tested. ReviewHub draws a **random sample** once, when the round starts; every reviewer screens that same set (see 4.5). The draw is reproducible (its seed is stored) and later imports never change it. Steps 1 and 2 stay editable during calibration.
+- **Another round after changing the criteria**: the lead clicks *Start round 2…* (in this card or under *Compare & consensus → Calibration*) and says what changed. Round 1 is closed with its agreement results and the criteria as they were, everyone's round 1 decisions are archived (a backup is taken first), and round 2 draws **fresh records** that were not in any earlier round. Every round, with its sample, agreement, κ and the reason for the next round, stays listed, and is included in the paper data (`protocol.calibrationRounds`).
 - **Full review**: a checklist shows what is ready, and a warning explains that starting **freezes the current state of step 1 (protocol & criteria) and step 2 (searches & import)**, together with the method settings (review type, framework, appraisal, deduplication). The lead confirms this explicitly, and main screening opens for everyone.
 
 You can run a calibration round first and start the full review afterwards, or skip calibration.
@@ -201,7 +204,7 @@ For each record decide:
 
 `1`–`9` tick criteria (for paired criteria: cycle meets → unclear → fails), `Enter` saves and moves on, `←`/`→` browse. Use *Review with full text* generously: that is what the JBI guidance recommends for ambiguous titles and abstracts.
 
-**Calibration first (optional, recommended).** Once the lead has started a calibration round (see [Start the review](#start-the-review-freezing-the-plan)), every reviewer screens the same pilot set: a random sample of N records, optionally of one search stream. Compare under *Compare & consensus → Calibration*, discuss disagreements, sharpen the criteria, and aim for ≥ 75 % agreement before the full review. Calibration decisions are stored separately and never count in PRISMA. Because the plan is not frozen yet, changing the criteria now needs no amendment.
+**Calibration first (optional, recommended).** Once the lead has started a calibration round (see [Start the review](#start-the-review-freezing-the-plan)), every reviewer screens the same random pilot set. Compare under *Compare & consensus → Calibration*: the panel at the top shows the current round, its agreement so far and all earlier rounds; below are the pairwise agreement, κ per criterion (red below 0.4: criteria read differently) and the disagreeing records side by side. Discuss the disagreements, sharpen the criteria, and run another round on fresh records until you reach ≥ 75 % agreement. Calibration decisions are stored separately and never count in PRISMA. Because the plan is not frozen yet, changing the criteria now needs no amendment.
 
 ### 4.6 Full-text screening
 
