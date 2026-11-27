@@ -1,9 +1,11 @@
 // Comparison step: independent decisions side by side, inter-rater agreement, and consensus.
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { CalibrationRounds } from '../components/PlanLock.jsx';
+import { canManage } from '../lib/lock.js';
 import { useReview } from '../lib/store.jsx';
 import {
-  codingPool, criteriaFor, criteriaHash, criterionCode, criterionState, reasonCriteria, reasonLabel, DECISION_LABEL, DECISIONS, decisionsOf, finalCoding, finalDecision, groupCodes, isAssigned, isHuman, stagePool,
+  codingPool, criteriaFor, criteriaHash, criterionApplies, criterionCode, criterionState, reasonCriteria, reasonLabel, DECISION_LABEL, DECISIONS, decisionsOf, finalCoding, finalDecision, groupCodes, isAssigned, isHuman, stagePool,
 } from '../lib/model.js';
 import { comparePair, compareCoding, fmtK, kappaBand, pct } from '../lib/agreement.js';
 import { guide } from '../lib/methods.js';
@@ -46,7 +48,7 @@ const LIST_FILTERS = {
 };
 
 export default function ComparePage() {
-  const { review, reload, status, update } = useReview();
+  const { review, reload, status, update, me } = useReview();
   const [stage, setStage] = useState('ta');
   const [params] = useSearchParams();
   const [scope, setScope] = useState(params.get('cal') ? 'calibration' : 'screening');
@@ -71,7 +73,9 @@ export default function ComparePage() {
   const cats = isCoding ? [] : DECISIONS[stage].map((d) => d.value);
   const pair = useMemo(() => {
     if (!A || !B) return null;
-    return isCoding ? compareCoding(maps[A.id], maps[B.id], review.codebook) : comparePair(maps[A.id], maps[B.id], { criteria: crit, categories: cats, stateOf: criterionState });
+    const recs = new Map(review.records.map((r) => [r.id, r]));
+    return isCoding ? compareCoding(maps[A.id], maps[B.id], review.codebook)
+      : comparePair(maps[A.id], maps[B.id], { criteria: crit, categories: cats, stateOf: criterionState, appliesTo: (c, id) => criterionApplies(review, c, recs.get(id)) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [A, B, maps, crit, isCoding, review.codebook]);
 
@@ -122,8 +126,10 @@ export default function ComparePage() {
             <button onClick={() => setScope('calibration')} className={`rounded-r-md px-3 py-1.5 ${scope === 'calibration' ? 'bg-amber-500 text-white' : 'hover:bg-stone-100'}`}>Calibration</button>
           </div>
         )}
-        {scope === 'calibration' && !isCoding && <Button size="sm" onClick={startNewRound}>Archive & start new calibration round</Button>}
+        {/* Title/abstract: numbered rounds with fresh records (step 4). Full text: archive and screen the set again. */}
+        {scope === 'calibration' && stage === 'ft' && canManage(review, me) && <Button size="sm" onClick={startNewRound}>Archive & start new calibration round</Button>}
       </div>
+      {scope === 'calibration' && stage === 'ta' && <Card className="p-4"><CalibrationRounds /></Card>}
 
       {active.length < 2 ? (
         <Empty title="Nothing to compare yet">At least two reviewers need decisions in this stage{!isCoding && scope === 'calibration' ? ' (calibration round)' : ''}. Reviewers so far: {active.map((x) => x.name).join(', ') || 'none'}.</Empty>

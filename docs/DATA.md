@@ -29,9 +29,9 @@ Ids are stable and prefixed: `rev_` review, `rv_` reviewer, `run_` search run, `
 | `schemaVersion`, `rev`, `createdAt`, `updatedAt` | Format version; `rev` increases with every save and protects against overwriting someone else's change |
 | `type`, `title` | Review type (`scoping`, `systematic`, `rapid`, `other`) and title |
 | `settings` | Framework, calibration set (`calibrationSize`, `calibrationStream`), deduplication mode, appraisal and streams switches |
-| `calibration` | Optional calibration round started by the lead: `{ startedAt, startedBy, method: "random", seed, size, stream, poolSize, drawnAt, ta: [recordId] }`. `ta` is the drawn title/abstract set; records are ordered by a hash of seed and record id, so the draw is reproducible. Full-text calibration uses the same seeded order over the full-text pool. Older rounds without `seed` use the first N records |
+| `calibration` | Optional calibration rounds started by the lead: `{ rounds: [ { n, startedAt, startedBy, reason, method: "random", seed, size, stream, poolSize, drawnAt, ta: [recordId], closedAt, closedBy, results, criteria } ] }`. The last round is the current one. `stream` is `""` (all records), a stream name, or `"*"` (stratified: the same number from every stream). Records are ordered by a hash of seed and record id; each round leaves out the records of earlier rounds. A closed round keeps its `results` (pairwise agreement, κ, κ per criterion) and the `criteria` as they were. Full-text calibration uses the same seeded order over the full-text pool. Older reviews without rounds use the first N records |
 | `protocol` | Objective, questions, framework `elements` (PCC values are mirrored in `pcc`), registration, evidence sources, highlight terms, notes |
-| `criteria[]` | `{ id, code, kind: inclusion\|exclusion\|paired, element, text, stages: [ta, ft] }`. Paired criteria also have `excludeText` (the exclusion side) and `mergedFrom` (ids of exclusion criteria folded into them; old decisions that ticked those count as *fails*) |
+| `criteria[]` | `{ id, code, kind: inclusion\|exclusion\|paired, element, text, stages: [ta, ft] }`. Paired criteria also have `excludeText` (the exclusion side) and `mergedFrom` (ids of exclusion criteria folded into them; old decisions that ticked those count as *fails*) `streams: [name]` limits a criterion to records found by those search streams (empty = all records; only while search streams are on) |
 | `runs[]` | Search runs: `database, platform, searchString, fields, dateRun, dateRange, filters, reportedHits, notes, imports[]` |
 | `records[]` | Imported records: `id, runId, importId, title, abstract, keywords, authors, year, journal, doi, url, type, pdf, duplicateOf, dupBy, studyOf` |
 | `reviewers[]` | `{ id, name, type: human\|llm, lead, model, assignment: { ta, ft, coding, appraisal: { mode: full\|sample\|none, percent } } }`. `lead: true` marks a lead reviewer, who alone changes the plan |
@@ -49,7 +49,7 @@ A record with `duplicateOf` set is a flagged duplicate and is not screened.
 | Key | Content |
 |---|---|
 | `screening.ta`, `screening.ft` | Decisions keyed by record id |
-| `calibration.ta`, `calibration.ft`, `calibrationArchive` | Pilot-round decisions (never counted in PRISMA) and earlier rounds |
+| `calibration.ta`, `calibration.ft`, `calibrationArchive` | Pilot-round decisions (never counted in PRISMA) of the current round, and earlier rounds (`{ stage, round, archivedAt, decisions }`) |
 | `evidence` | Excerpts from full texts: text, page, linked criterion or codes |
 | `coding` | Per record: `codes[]`, `fields{}` (charting values), `done` |
 | `appraisal` | Per record: item judgements with support, overall judgement, `done` |
@@ -102,7 +102,7 @@ It contains **final values only** (consensus, or agreement of the human reviewer
 | Key | Content |
 |---|---|
 | `format`, `version`, `generatedAt`, `reviewhubVersion` | `"reviewhub-paper-data"`, `1`, and when / with which version it was made |
-| `review` | `id, title, type, guideline, methodology, framework`, `protocol { objective, questions, registration, elements { key: { label, text } }, evidenceSources, deviations, startedAt, calibration { method, size, poolSize, stream, seed, drawnAt } \| null, amendments [ { kind, at, by, reason, changes, decisionsBefore } ] }`, `criteria [ { code, kind, element, stages, text } ]` |
+| `review` | `id, title, type, guideline, methodology, framework`, `protocol { objective, questions, registration, elements { key: { label, text } }, evidenceSources, deviations, startedAt, calibrationRounds [ { round, startedAt, closedAt, reason, sample { method, size, poolSize, stream, seed }, results { records, reviewers, pairs [ { a, b, n, agree, kappa, binaryKappa, perCriterion } ] } } ], amendments [ { kind, at, by, reason, changes, decisionsBefore } ] }`, `criteria [ { code, kind, element, stages, text } ]` |
 | `reviewers` | `[ { id, name, type, model, assignment } ]` |
 | `searches` | `[ { database, platform, sourceType, stream, variant, dateRun, dateRange, searchString, fields, filters, reportedHits, imported } ]` |
 | `prisma` | Flow numbers: `identified, identifiedDatabases, identifiedOther, perDatabase[], duplicates, unique, taScreened, taExcluded, sought, notRetrieved, assessed, ftExcluded, reasons [[label, n]], ftIncluded, studies`, plus pending / conflict counts |

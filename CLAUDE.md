@@ -54,7 +54,9 @@ node scripts/rh.mjs decide <review> --reviewer "Claude (agent)" --stage ta --fil
 node scripts/rh.mjs decide <review> --reviewer "Claude (agent)" --stage ta --file decisions.jsonl --model "<model id>" --prompt-version v1
 ```
 
-`decide` and `code` refuse to write while the full review is **not started** (then only `--scope calibration` works, and only once the lead has started a calibration round) or **paused** because the frozen plan changed (`show` → `status`). The calibration set may be limited to one search stream; `pool --scope calibration` returns exactly that set. Do not work around this; tell the user the lead reviewer has to start the review or resolve the changes in the app.
+`decide` and `code` refuse to write while the full review is **not started** (then only `--scope calibration` works, and only once the lead has started a calibration round) or **paused** because the frozen plan changed (`show` → `status`). `pool --scope calibration` returns exactly the current round's set.
+
+**Stream-specific criteria.** With search streams, a criterion can apply only to records of certain streams (`show` → `criteria[].streams`). `pool` lists each record's `streams` and the `criteria` codes that apply to it: judge each record only against those. `decide` rejects criteria that do not apply to the record. A record found by several streams is included if it meets the shared criteria and those of at least one of its streams. Do not work around this; tell the user the lead reviewer has to start the review or resolve the changes in the app.
 
 `<review>` is the review id or a unique fragment of its title; `--reviewer` takes an id or the name. `pool` returns only pending records unless `--all`. Work in batches (e.g. 50): run with `--dry-run` first, then for real, check the output, and report progress to the user. One invalid line aborts the whole write (fix it, or use `--allow-partial` deliberately). Use `--scope calibration` to take part in the calibration round. Keep batch files in a temporary folder, not in the project.
 

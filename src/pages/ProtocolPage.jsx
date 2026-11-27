@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useReview } from '../lib/store.jsx';
 import { Link } from 'react-router-dom';
-import { criterionCode, mergeIntoPair, newCriterion, STAGES } from '../lib/model.js';
+import { criterionCode, mergeIntoPair, newCriterion, STAGES, streamNames } from '../lib/model.js';
 import { criterionElements, FRAMEWORKS, frameworkElements, frameworkValues, guide, reviewSettings } from '../lib/methods.js';
 import { Button, Card, Field, Input, SectionTitle, Select, Textarea } from '../components/ui.jsx';
 import { PlanBanner, ReadOnly, usePlanAccess } from '../components/PlanLock.jsx';
@@ -92,7 +92,7 @@ export default function ProtocolPage() {
       <section>
         <SectionTitle
           title="Eligibility criteria"
-          hint="These become the checklist during screening. A paired criterion is one row with an inclusion and an exclusion side, judged meets / unclear / fails (a fail is the exclusion reason). Simple inclusion or exclusion criteria (e.g. language) are ticked. Mark at which stage each criterion can be judged; some (e.g. study design) often only at full text."
+          hint={`These become the checklist during screening. A paired criterion is one row with an inclusion and an exclusion side, judged meets / unclear / fails (a fail is the exclusion reason). Simple inclusion or exclusion criteria (e.g. language) are ticked. Mark at which stage each criterion can be judged; some (e.g. study design) often only at full text.${reviewSettings(review).streams ? ' With search streams, a criterion can apply to all records or only to those found by certain streams: a record is judged against the shared criteria plus those of every stream that found it.' : ''}`}
           actions={editable && <AddCriterion onAdd={(kind) => update((r) => ({ ...r, criteria: [...r.criteria, newCriterion(kind)] }))} />}
         />
         <ReadOnly when={!editable}>
@@ -141,6 +141,9 @@ function CriteriaList({ kind, editable }) {
     return { ...r, criteria: arr };
   });
   const tone = { inclusion: 'text-emerald-700', exclusion: 'text-rose-700' }[kind] || 'text-stone-700';
+  // With search streams on, a criterion can apply to every record or only to records found by certain streams.
+  const streamsOn = reviewSettings(review).streams;
+  const toggleStream = (c, s) => set(c.id, { streams: (c.streams || []).includes(s) ? c.streams.filter((x) => x !== s) : [...(c.streams || []), s] });
   const exclusions = review.criteria.filter((c) => c.kind === 'exclusion');
   const setKind = (id, k) => set(id, k === 'paired' ? { kind: k, group: undefined, excludeText: review.criteria.find((c) => c.id === id)?.excludeText || '' } : { kind: k });
   const merge = (id, excId) => {
@@ -183,6 +186,18 @@ function CriteriaList({ kind, editable }) {
                   {criterionElements(review).map((el) => <option key={el.value} value={el.value} className="text-black">{el.label}</option>)}
                   {c.element && !criterionElements(review).some((el) => el.value === c.element) && <option value={c.element}>{c.element}</option>}
                 </Select></div>
+                {streamsOn && (streamNames(review).length > 0 || c.streams?.length > 0) && (
+                  <div className="flex flex-wrap items-center gap-1 text-xs" title="Which records this criterion is judged for: all, or only those found by the chosen search streams">
+                    <span className="text-stone-500">applies to</span>
+                    <button type="button" onClick={() => set(c.id, { streams: [] })}
+                      className={`px-1.5 py-0.5 ring-1 ${!c.streams?.length ? 'bg-stone-800 text-white ring-stone-800' : 'text-stone-600 ring-stone-300 hover:bg-stone-100'}`}>all streams</button>
+                    {[...new Set([...streamNames(review), ...(c.streams || [])])].map((s) => (
+                      <button key={s} type="button" onClick={() => toggleStream(c, s)}
+                        className={`px-1.5 py-0.5 ring-1 ${c.streams?.includes(s) ? 'bg-indigo-700 text-white ring-indigo-700' : 'text-stone-600 ring-stone-300 hover:bg-stone-100'} ${streamNames(review).includes(s) ? '' : 'line-through'}`}
+                        title={streamNames(review).includes(s) ? '' : 'No search run uses this stream any more'}>{s}</button>
+                    ))}
+                  </div>
+                )}
                 {Object.values(STAGES).map((s) => (
                   <label key={s.key} className="flex items-center gap-1.5 text-stone-600">
                     <input

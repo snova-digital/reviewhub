@@ -10,7 +10,11 @@
 //
 // review.lock = { startedAt, startedBy, baseline: { type, settings, protocol, criteria, runs }, log: [ … ] }
 // All keys are optional, so older reviews need no migration.
-import { calibrationPool, criterionCode, seededSample } from './model.js';
+import {
+  calibrationPool, calibrationRounds, calibrationSet, criteriaFor, criterionApplies, criterionCode, criterionState, currentCalibrationRound,
+  DECISIONS, decisionsOf, drawSample, stagePool, STRATIFIED, streamNames,
+} from './model.js';
+import { comparePair } from './agreement.js';
 import { frameworkElements, frameworkValues, reviewSettings } from './methods.js';
 
 const clone = (x) => JSON.parse(JSON.stringify(x ?? null));
@@ -63,7 +67,7 @@ const RUN_FIELDS = {
   searchString: 'search string', fields: 'fields searched', dateRun: 'date executed', dateRange: 'date range',
   filters: 'limits / filters', reportedHits: 'reported hits',
 };
-const CRIT_FIELDS = { code: 'code', kind: 'type', element: 'element', group: 'group', text: 'wording', excludeText: 'exclusion side', stages: 'stages' };
+const CRIT_FIELDS = { code: 'code', kind: 'type', element: 'element', group: 'group', text: 'wording', excludeText: 'exclusion side', stages: 'stages', streams: 'streams' };
 const METHOD = { type: 'Review type', framework: 'Eligibility framework', customElements: 'Custom framework elements', appraisal: 'Critical appraisal', dedup: 'Deduplication mode' };
 const PROTOCOL = { registration: 'Protocol registration', objective: 'Objective', evidenceSources: 'Types of evidence sources' };
 
@@ -83,6 +87,7 @@ function view(src) {
     criteria: (src.criteria || []).map((c) => ({
       id: c.id, code: criterionCode(src, c.id), kind: c.kind, element: c.element || '', group: t(c.group), text: t(c.text),
       excludeText: c.kind === 'paired' ? t(c.excludeText) : '', stages: [...(c.stages || [])].sort().join(' + '),
+      streams: [...(c.streams || [])].sort().join(' + ') || 'all',
     })),
     runs: (src.runs || []).map((r) => ({
       id: r.id, name: t(r.database) || 'untitled run',
@@ -146,50 +151,129 @@ export function planChanges(review) {
   return out;
 }
 
-// ---- optional calibration round ------------------------------------------------------------------
-// Before the full review the lead may start a calibration round (settings.calibrationSize, settings.calibrationStream).
-// Reviews that already have calibration decisions count as having one.
+// ---- optional calibration rounds ----------------------------------------------------------------
+// Before the full review the lead may run calibration rounds (data: review.calibration.rounds, see model.js).
+// Each round is a fresh random sample (records of earlier rounds are left out). Starting the next round saves the
+// current round's agreement results with it and archives every reviewer's calibration decisions (never deleted).
+// Reviews that already have calibration decisions from before rounds existed count as having one.
 export function calibrationStarted(review) {
-  if (review.calibration?.startedAt) return true;
+  if (calibrationRounds(review).length) return true;
   return Object.values(review.decisions || {}).some((d) => Object.keys(d.calibration?.ta || {}).length || Object.keys(d.calibration?.ft || {}).length);
 }
 
 // Search streams the calibration set can be drawn from (only with search streams switched on, and at least two).
 export function calibrationStreams(review) {
   if (!reviewSettings(review).streams) return [];
-  const streams = [...new Set((review.runs || []).map((r) => t(r.stream)).filter(Boolean))];
+  const streams = streamNames(review);
   return streams.length > 1 ? streams : [];
 }
 
-// Draw the title/abstract calibration set: a seeded random sample, stored as record ids so it never changes under the
-// reviewers. Redrawing with the same seed (a different size or stream) keeps as many of the drawn records as possible.
-function draw(review, seed, size, stream) {
-  const pool = calibrationPool(review, 'ta', stream);
-  return { method: 'random', seed, size, stream, poolSize: pool.length, drawnAt: stamp(), ta: seededSample(pool, `${seed}|ta`, size).map((r) => r.id) };
-}
+const usedIds = (review, exceptLast = false) => new Set(calibrationRounds(review).slice(0, exceptLast ? -1 : undefined).flatMap((r) => r.ta || []));
 const newSeed = () => Math.random().toString(36).slice(2, 10);
 
+// Sample of fresh records for a round; stored as ids so the set never changes under the reviewers.
+function draw(review, { seed, size, stream, exclude }) {
+  const pool = calibrationPool(review, 'ta', stream).filter((r) => !exclude.has(r.id));
+  const ta = drawSample(review, 'ta', { seed, size, stream, exclude }).map((r) => r.id);
+  return { method: 'random', seed, size, stream, poolSize: pool.length, drawnAt: stamp(), ta };
+}
+
+// How many fresh records a new round with these settings would get (for the forms).
+export function calibrationPreview(review, { size, stream = '', replacing = false }) {
+  const exclude = usedIds(review, replacing);
+  const pool = calibrationPool(review, 'ta', stream).filter((r) => !exclude.has(r.id)).length;
+  return { pool, n: Math.min(size, pool) };
+}
+
 export function startCalibration(review, rid, { size, stream = '' }) {
+  const round = { n: 1, startedAt: stamp(), startedBy: rid, reason: '', ...draw(review, { seed: newSeed(), size, stream, exclude: new Set() }) };
+  return { ...review, settings: { ...(review.settings || {}), calibrationSize: size, calibrationStream: stream }, calibration: { rounds: [round] } };
+}
+
+// Lead corrects size or stream of the current round before anyone has screened in it (same seed, same exclusions).
+export function changeCalibration(review, { size, stream = '' }) {
+  const rounds = calibrationRounds(review);
+  const cur = rounds.at(-1);
+  const settings = { ...(review.settings || {}), calibrationSize: size, calibrationStream: stream };
+  if (!cur) return { ...review, settings };
+  const next = { ...cur, ...draw(review, { seed: cur.seed, size, stream, exclude: usedIds(review, true) }) };
+  return { ...review, settings, calibration: { ...review.calibration, rounds: [...rounds.slice(0, -1), next] } };
+}
+
+export const currentRoundHasDecisions = (review) => {
+  const set = new Set(calibrationSet(review, 'ta').map((r) => r.id));
+  return Object.values(review.decisions || {}).some((d) => Object.keys(d.calibration?.ta || {}).some((id) => set.has(id)));
+};
+
+// Agreement in the current round, per pair of reviewers who screened in it (same measures as Compare & consensus).
+export function calibrationResults(review) {
+  const set = calibrationSet(review, 'ta');
+  const ids = new Set(set.map((r) => r.id));
+  const recs = new Map(review.records.map((r) => [r.id, r]));
+  const crit = criteriaFor(review, 'ta');
+  const maps = review.reviewers.map((rv) => [rv, decisionsOf(review, rv.id).calibration?.ta || {}])
+    .filter(([, m]) => Object.keys(m).some((id) => ids.has(id)));
+  const pairs = [];
+  for (let i = 0; i < maps.length; i++) {
+    for (let j = i + 1; j < maps.length; j++) {
+      const [[a, ma], [b, mb]] = [maps[i], maps[j]];
+      const p = comparePair(ma, mb, { criteria: crit, ids, categories: DECISIONS.ta.map((d) => d.value), stateOf: criterionState, appliesTo: (c, id) => criterionApplies(review, c, recs.get(id)) });
+      pairs.push({
+        a: a.name, b: b.name, aType: a.type, bType: b.type, n: p.shared.length,
+        agree: p.decision.agree, kappa: p.decision.kappa, binaryAgree: p.binary.agree, binaryKappa: p.binary.kappa,
+        perCriterion: p.perCriterion.filter((x) => x.used).map((x) => ({ code: criterionCode(review, x.criterion.id), n: x.n, agree: x.agree, kappa: x.kappa })),
+      });
+    }
+  }
   return {
-    ...review,
-    settings: { ...(review.settings || {}), calibrationSize: size, calibrationStream: stream },
-    calibration: { startedAt: stamp(), startedBy: rid, ...draw(review, newSeed(), size, stream) },
+    computedAt: stamp(), records: set.length,
+    reviewers: maps.map(([rv, m]) => ({ name: rv.name, type: rv.type, done: Object.keys(m).filter((id) => ids.has(id)).length })),
+    pairs,
   };
 }
 
-// Lead changes size or stream while the round runs. Older rounds without a seed keep "first N" (only the settings change).
-export function changeCalibration(review, { size, stream = '' }) {
-  const settings = { ...(review.settings || {}), calibrationSize: size, calibrationStream: stream };
-  const cal = review.calibration;
-  if (!cal?.seed) return { ...review, settings };
-  return { ...review, settings, calibration: { ...cal, ...draw(review, cal.seed, size, stream) } };
+// The first human × human pair: the headline agreement of a round.
+export const headlinePair = (results) => results?.pairs?.find((p) => p.aType !== 'llm' && p.bType !== 'llm') || null;
+
+// Close the current round (results + criteria as they were), archive everyone's calibration decisions, draw fresh
+// records for the next one. The lead's browser writes every reviewer file, so take a backup first (api.backup).
+export function startNextRound(review, rid, { reason, size, stream = '' }) {
+  const rounds = calibrationRounds(review);
+  // Calibration decisions from before rounds existed (first N records, nothing drawn): close them as round 1.
+  const cur = rounds.at(-1) || {
+    n: 1, method: 'first-n', size: review.settings?.calibrationSize || 20, stream: '',
+    poolSize: stagePool(review, 'ta').length, ta: calibrationSet(review, 'ta').map((r) => r.id),
+  };
+  const at = stamp();
+  const closed = {
+    ...cur, closedAt: at, closedBy: rid, results: calibrationResults(review),
+    criteria: criteriaFor(review, 'ta').map((c) => ({ code: criterionCode(review, c.id), kind: c.kind, text: c.text, excludeText: c.excludeText || '', streams: c.streams || [] })),
+  };
+  const decisions = Object.fromEntries(Object.entries(review.decisions || {}).map(([id, d]) => [id, !Object.keys(d.calibration?.ta || {}).length ? d : {
+    ...d,
+    calibrationArchive: [...(d.calibrationArchive || []), { stage: 'ta', round: cur.n, archivedAt: at, decisions: d.calibration.ta }],
+    calibration: { ...d.calibration, ta: {} },
+  }]));
+  const used = new Set(rounds.flatMap((r) => r.ta || []));
+  const next = { n: cur.n + 1, startedAt: at, startedBy: rid, reason: t(reason), ...draw(review, { seed: cur.seed || newSeed(), size, stream, exclude: used }) };
+  return {
+    ...review,
+    decisions,
+    settings: { ...(review.settings || {}), calibrationSize: size, calibrationStream: stream },
+    calibration: { ...review.calibration, rounds: [...rounds.slice(0, -1), closed, next] },
+  };
 }
 
-// One line for the methods section, e.g. "random sample of 25 of 1,340 records (stream RQ1; seed k3x9a1bz)".
+// One line for the methods section, e.g. "round 2: random sample of 25 of 1,315 records (stratified across streams; seed k3x9a1bz)".
+export function roundSummary(round) {
+  if (!round) return '';
+  if (round.method === 'first-n') return `first ${round.ta?.length ?? round.size} of ${(round.poolSize || 0).toLocaleString('en')} records in screening order`;
+  const where = round.stream === STRATIFIED ? 'stratified across streams; ' : round.stream ? `stream ${round.stream}; ` : '';
+  return `random sample of ${round.ta?.length ?? round.size} of ${round.poolSize.toLocaleString('en')} records (${where}seed ${round.seed})`;
+}
 export function calibrationSummary(review) {
-  const cal = review.calibration;
-  if (!cal?.seed) return `first ${review.settings?.calibrationSize || 20} records in screening order`;
-  return `random sample of ${cal.ta?.length ?? cal.size} of ${cal.poolSize.toLocaleString('en')} records (${cal.stream ? `stream ${cal.stream}; ` : ''}seed ${cal.seed})`;
+  const round = currentCalibrationRound(review);
+  return round ? `round ${round.n}: ${roundSummary(round)}` : `first ${review.settings?.calibrationSize || 20} records in screening order`;
 }
 
 // What blocks screening / coding / appraisal work right now:

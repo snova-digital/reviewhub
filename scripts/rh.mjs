@@ -10,13 +10,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { resolveWorkspace, ROOT } from '../server/workspace.js';
 import {
-  calibrationSet, canBeReason, codebookLogEntry, codingPool, criteriaFor, criteriaHash, criterionCode, decisionsOf, emptyDecisions,
+  calibrationRounds, calibrationSet, canBeReason, isScoped, recordStreams, codebookLogEntry, codingPool, criteriaFor, criteriaHash, criterionCode, decisionsOf, emptyDecisions,
   ftPool, isAssigned, newCode, newReviewer, uniqueRecords,
 } from '../src/lib/model.js';
 import { frameworkElements, frameworkValues, profileOf, reviewSettings } from '../src/lib/methods.js';
 import { prismaCounts } from '../src/lib/prisma.js';
 import { buildPaperData } from '../src/lib/paperData.js';
-import { calibrationStarted, isStarted, leadsOf, planChanges, workBlock } from '../src/lib/lock.js';
+import { calibrationStarted, calibrationSummary, isStarted, leadsOf, planChanges, workBlock } from '../src/lib/lock.js';
 
 const WS = resolveWorkspace();
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
@@ -172,7 +172,7 @@ Hosted version (Neon + Vercel Blob; needs .env.local from \`vercel env pull .env
     const p = profileOf(r);
     const c = prismaCounts(r);
     const values = frameworkValues(r);
-    const crit = (stage) => criteriaFor(r, stage).map((x) => ({ code: criterionCode(r, x.id), kind: x.kind, element: x.element, group: x.group || null, text: x.text, ...(x.kind === 'paired' ? { excludeText: x.excludeText || '' } : {}) }));
+    const crit = (stage) => criteriaFor(r, stage).map((x) => ({ code: criterionCode(r, x.id), kind: x.kind, element: x.element, group: x.group || null, streams: isScoped(r, x) ? x.streams : null, text: x.text, ...(x.kind === 'paired' ? { excludeText: x.excludeText || '' } : {}) }));
     out({
       id, title: r.title, type: r.type, methodology: p.methodology, guideline: p.guideline, folder: reviewDir(id),
       protocol: {
@@ -187,13 +187,11 @@ Hosted version (Neon + Vercel Blob; needs .env.local from \`vercel env pull .env
         ft: 'decision: include | exclude | not_retrieved. Exclude requires "reason" = code of the primary exclusion criterion.',
         paired: 'Paired criteria (kind "paired") have an inclusion side (text) and an exclusion side (excludeText). Judge each: met "yes" = inclusion side fits, "no" = exclusion side fits (it fails; its code can be the exclusion reason), "unclear" = neither clearly. All paired criteria met → include; any failing → exclude; otherwise unclear.',
         groups: 'Inclusion criteria sharing a group: at least one of the group must be met; ungrouped inclusion criteria must all be met.',
+        streams: 'Criteria with "streams" apply only to records whose "streams" (in pool output) include one of them; judge each record only against the criteria in its "criteria" list. A record found by several streams is included if it meets the shared criteria and those of at least one of its streams.',
       },
       status: {
         started: isStarted(r), startedAt: r.lock?.startedAt || null, leads: leadsOf(r).map((x) => x.name),
-        calibration: calibrationStarted(r) ? {
-          method: r.calibration?.seed ? 'random' : 'first-n', seed: r.calibration?.seed || null,
-          stream: r.settings?.calibrationStream || null, records: calibrationSet(r, 'ta').length,
-        } : null,
+        calibration: calibrationStarted(r) ? { current: calibrationSummary(r), records: calibrationSet(r, 'ta').length, rounds: calibrationRounds(r).length } : null,
         pausedBy: planChanges(r).map((x) => x.label),
         amendments: (r.lock?.log || []).filter((e) => e.kind !== 'start').map((e) => ({ kind: e.kind, at: e.at, reason: e.reason })),
       },
@@ -230,6 +228,8 @@ Hosted version (Neon + Vercel Blob; needs .env.local from \`vercel env pull .env
     for (const x of recs) {
       console.log(JSON.stringify({
         recordId: x.id, title: x.title, abstract: x.abstract, keywords: x.keywords, authors: x.authors, year: x.year, journal: x.journal, doi: x.doi,
+        // Which search streams found the record, and the criteria codes that apply to it (shared + its streams).
+        ...(stage !== 'coding' ? { streams: recordStreams(r, x), criteria: criteriaFor(r, stage, x).map((c) => criterionCode(r, c.id)) } : {}),
         ...(stage !== 'ta' ? { pdf: pdfPath(id, x) } : {}),
       }));
     }
@@ -249,6 +249,7 @@ Hosted version (Neon + Vercel Blob; needs .env.local from \`vercel env pull .env
     const codeToId = Object.fromEntries(criteriaFor(r, stage).map((c) => [criterionCode(r, c.id).toLowerCase(), c.id]));
     const valid = stage === 'ta' ? { include: 'include', unclear: 'unclear', fulltext: 'unclear', exclude: 'exclude' } : { include: 'include', exclude: 'exclude', not_retrieved: 'not_retrieved' };
     const pool = new Set((stage === 'ta' ? uniqueRecords(r) : ftPool(r)).map((x) => x.id));
+    const recById = new Map(r.records.map((x) => [x.id, x]));
     const hash = criteriaHash(r, stage);
     const runId = runIdNow();
     const entries = readJsonl(opt.file);
@@ -263,6 +264,9 @@ Hosted version (Neon + Vercel Blob; needs .env.local from \`vercel env pull .env
       const crit = (e.criteria || []).map((c) => ({ code: String(c.code || ''), met: String(c.met || '').toLowerCase(), evidence: c.evidence ?? null, location: c.location ?? null }));
       const unknown = crit.filter((c) => !codeToId[c.code.toLowerCase()]).map((c) => c.code);
       if (unknown.length) { errors.push(`${where}: unknown criterion code(s) ${unknown.join(', ')}`); continue; }
+      const applicable = new Set(criteriaFor(r, stage, recById.get(e.recordId)).map((c) => c.id));
+      const notHere = crit.filter((c) => !applicable.has(codeToId[c.code.toLowerCase()])).map((c) => c.code);
+      if (notHere.length) { errors.push(`${where}: criterion ${notHere.join(', ')} does not apply to this record (stream-specific; see "criteria" in pool output)`); continue; }
       if (crit.some((c) => !['yes', 'no', 'unclear'].includes(c.met))) { errors.push(`${where}: criteria[].met must be yes, no or unclear`); continue; }
       const reason = e.reason ? codeToId[String(e.reason).toLowerCase()] : null;
       if (reason && !canBeReason(r.criteria.find((c) => c.id === reason))) { errors.push(`${where}: reason ${e.reason} is not an exclusion or paired criterion`); continue; }
